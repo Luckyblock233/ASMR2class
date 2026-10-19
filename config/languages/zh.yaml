@@ -1,0 +1,13 @@
+# config/languages/zh.yaml —— 中文档案（源语言为中文时使用）
+language: zh
+display_name: 中文
+language_pair:
+  source: zh
+  target: en
+asr:
+  language_hint: zh
+llm: {}
+prompts:
+  translate: _default/translate.txt
+subtitle:
+  display_order: source_first

@@ -1,0 +1,127 @@
+# 全局配置模板 —— 实时语音翻译学习工具
+# 本文件是入库模板。首次运行时会被复制为 config/config.yaml（已 gitignore，
+# 用于保存你的本地配置与 API key），之后所有修改都作用于 config.yaml。
+# 优先级：环境变量 > 语言档案覆盖 > config/config.yaml
+
+# ---- LLM 简易模式（向后兼容）----
+# 仅用一个云端服务时填这里即可（等价于自动注册一个名为 default 的 Provider
+# 并绑定到翻译/语法两个槽位）。首次启动时若以下三项为空且未配置 providers，
+# 会自动进入设置向导。
+# 要使用多 Provider / 本地模型 / 双槽位分离，请改用下方 providers + slots 节。
+# api_key 也可用环境变量 ASR2CLASS_LLM_API_KEY 覆盖（优先级更高，且不写入文件）。
+llm:
+  base_url: ""        # 例如 https://your-provider.example.com/v1
+  api_key: ""         # 请勿提交到版本库；建议改用环境变量
+  model: ""           # 例如 your-model-name
+  timeout_sec: 30     # 单次请求超时
+  max_retries: 3      # 指数退避重试次数（1s/2s/4s...）
+
+# ---- 模型提供方（Provider）与槽位（Slot）----
+# 翻译与语法分析是两个独立槽位，按 provider id 绑定；可绑同一 provider。
+# 能力标签：translation（可绑翻译槽）| grammar（可绑语法槽）| glossary_constraint（术语表硬约束）
+# 语言档案内 slots.translation / slots.grammar 可覆盖此处绑定（档案优先）。
+# providers:
+#   - id: my-cloud                     # 云端通用模型（OpenAI 兼容）
+#     name: "云端通用模型"
+#     type: openai_compatible
+#     base_url: "https://your-provider.example.com/v1"
+#     api_key: ""                      # 建议留空，用环境变量 ASR2CLASS_LLM_API_KEY
+#     model: "your-model-name"
+#     capabilities: [translation, grammar]
+#
+#   - id: local-translator             # 本地 GGUF 翻译模型（llama.cpp server，应用托管子进程）
+#     name: "本地翻译模型"
+#     type: llama_cpp_server
+#     base_url: "http://127.0.0.1:8080/v1"
+#     api_key: "EMPTY"
+#     model: "local-translator"        # llama-server 的 --alias
+#     capabilities: [translation, glossary_constraint]   # 翻译专用，不能绑语法槽
+#     params:                          # 请求参数透传（按模型官方推荐配置）
+#       temperature: 0
+#       max_tokens: 1024
+#       chat_template_kwargs: {enable_thinking: false}   # 嵌套键原样进 extra_body
+#     local:
+#       managed: true                  # 应用负责启动/停止 llama-server
+#       gguf_path: "models/translator-Q4_K_M.gguf"
+#       server_bin: "llama-server"     # 新版 llama.cpp 单二进制用 "llama serve"；也可填绝对路径
+#       server_args: "--port 8080 --ctx-size 8192 -ngl 99"
+#       vram_budget_mb: 1500           # 启动前显存预检：空闲不足时警告（不静默抢占）
+#       download:                      # uv run python -m src.main --download-model local-translator
+#         hf_repo: "your-org/your-gguf-repo"        # 例：IndexTeam/Index-Translate-2B-GGUF
+#         hf_file: "translator-Q4_K_M.gguf"         # 例：Index-Translate-2B.Q4_K_M.gguf
+#         modelscope_repo: "your-org/your-gguf-repo"
+#         modelscope_file: "translator-Q4_K_M.gguf"
+#
+# slots:
+#   translation: local-translator      # 翻译槽绑定
+#   grammar: my-cloud                  # 语法槽绑定（留空 = 语法分析停用）
+
+
+# ---- ASR / GPU 策略（见需求文档 §4.2）----
+asr:
+  device: auto        # auto | cuda | cpu ；cpu = 纯 CPU 模式
+  model_size: small   # GPU 默认 small；medium 需显式改这里
+  compute_type: ""    # 留空自动选择：cuda->int8_float16, cpu->int8
+  vram_budget_mb: 2500        # ASR 显存预算
+  vram_min_free_mb: 2000      # 须为其他应用保留的空闲显存，不足则自动降级
+  beam_size: 5
+  # 幻觉门控：静音/BGM 段会幻觉出视频结尾高频字幕句（如「ご視聴ありがとう…」）。
+  # 同时满足 no_speech_prob > 阈值 且 avg_logprob < 阈值 的段被丢弃（调低阈值更严格）
+  no_speech_threshold: 0.6
+  log_prob_threshold: -1.0
+  compression_ratio_threshold: 2.4   # 重复性幻觉（压缩比异常高）直接丢弃
+  condition_on_previous: false       # true 会让幻觉句把后续段落带偏，流式场景保持关闭
+  # 幻觉短语黑名单：形态固定的视频结尾客套话（归一化后包含匹配即丢弃，误杀时删条目）
+  hallucination_phrases: ["視聴してくださって", "ご視聴ありがとう", "最後までご視聴",
+                          "最後まで見てくださって", "チャンネル登録",
+                          "thank you for watching", "thanks for watching", "please subscribe"]
+
+# ---- 音频采集 ----
+audio:
+  source: mic         # mic | loopback
+  sample_rate: 16000
+  block_ms: 30        # 回调块大小
+  # loopback 设备名（Windows），留空 = 默认输出设备
+  loopback_device: ""
+
+# ---- 断句（VAD）----
+segmentation:
+  silence_ms: 500     # 静音多久判为句尾
+  max_segment_sec: 15 # 强制切段上限
+
+# ---- VAD 后端（可插拔：silero | whisper_asmr）----
+vad:
+  backend: silero     # silero = faster-whisper 内置（默认，零下载）
+  # whisper_asmr = 耳语/软语专用 VAD（20ms 帧高精度，首次使用自动下载 ONNX）
+  # backend: whisper_asmr
+  # threshold: 0.5               # 语音帧判定阈值（负阈值自动 -0.15 滞后防抖）
+  # model_path: "models/whisper-vad-asmr.onnx"
+  # device: auto                 # auto | cuda | cpu（GPU 需换装 onnxruntime-gpu，见 README）
+  # recompute_ms: 1000           # 增量推理节流：新增音频不足该值复用缓存帧概率（切句确认不受限）
+  # download:
+  #   hf_repo: "TransWithAI/Whisper-Vad-EncDec-ASMR-onnx"
+  #   hf_file: "model.onnx"
+  #   modelscope_repo: ""        # 无镜像则留空
+  #   modelscope_file: ""
+
+# ---- 上下文感知翻译（见 doc/上下文感知翻译-专项需求文档）----
+context:
+  tail_sentences: 3        # FR-C1 滑动窗口：前块尾部历史句数，0 = 关闭
+  history_max_tokens: 512  # FR-C1.3 历史 token 上限（粗估，超出裁最早的历史）
+  block:
+    max_sentences: 8       # FR-C2 块句数上限（3-15）；1 = 退化为逐句翻译
+    max_sentences_offline: 20  # 离线批处理模式的块上限（FR-C2.5）
+    silence_gap_sec: 1.5   # FR-C2.2 静音间隙超过该值即成块
+  memory:
+    enabled: true          # FR-C3 滚动记忆总开关
+    glossary_max_entries: 100  # 实体登记表上限，超出按 LRU 淘汰
+    style_max_chars: 200       # 风格摘要上限
+
+# ---- 会话 ----
+session:
+  default_profile: ja # 默认语言档案（config/languages/<name>.yaml）
+
+# ---- 界面（M2 悬浮窗）----
+ui:
+  overlay: true       # 实时模式显示置顶半透明字幕悬浮窗
+  opacity: 0.85       # 初始透明度（0.2-1.0，运行中可用悬浮窗按钮调整）

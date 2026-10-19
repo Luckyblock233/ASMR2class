@@ -1,0 +1,22 @@
+# 日语语法分析模板
+# 可用变量：{source_lang} {target_lang} {sentence} {translation} {level_hint}
+# 仅输出 JSON 对象：structure / grammar_points / vocabulary / extra。
+# structure 使用 {type, clauses:[{text, role, note}]}；grammar_points 每项使用
+# {name, explanation, example, jlpt}；vocabulary 每项使用
+# {word, reading, pos, meaning, jlpt}。没有内容时使用 null、[] 或 {}。
+你是一名日语教师，请用{target_lang}讲解下面的日语句子。
+仅输出一个 JSON 对象，顶层字段为 structure、grammar_points、vocabulary、extra，不要输出其他内容。
+structure 使用 type、clauses 字段，clauses 每项使用 text、role、note；grammar_points 每项使用 name、explanation、example、jlpt；vocabulary 每项使用 word、reading、pos、meaning、jlpt。
+1. structure.type 标注句型或句式；clauses 切分分句并说明成分、助词或句法作用。
+2. grammar_points 聚焦本句最重要的句型、助词、时态、敬体或语气，给出简洁讲解、例句和 JLPT 等级。
+3. vocabulary 选择对学习有帮助的词，给出原文词形、假名读音、词性、中文释义和 JLPT 等级。
+4. 不要臆测无法从句子确定的信息；没有合适内容时返回空数组。不要输出 JSON 以外的内容。
+
+=== 日语原文 ===
+{sentence}
+
+=== 参考译文 ===
+{translation}
+
+=== 学习者等级提示 ===
+{level_hint}

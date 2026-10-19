@@ -1,0 +1,45 @@
+# config/languages/en.yaml —— 英语学习档案
+language: en
+display_name: 英语
+language_pair:
+  source: en
+  target: zh
+asr:
+  language_hint: en
+llm: {}
+level_hint: CEFR A2-B2，重点讲解当前句子中的时态、从句和常用搭配
+prompts:
+  translate: en/translate.txt
+  grammar: en/grammar.txt
+subtitle:
+  display_order: source_first
+grammar_card:
+  sections:
+    - key: structure
+      title: 句子结构
+      renderer: tree
+    - key: grammar_points
+      title: 语法点
+      renderer: cards
+      title_field: name
+      body_fields:
+        - {key: explanation, label: 讲解}
+        - {key: example, label: 例句}
+      badge:
+        field: cefr
+        colors:
+          A1: "#4CAF50"
+          A2: "#8BC34A"
+          B1: "#FFC107"
+          B2: "#FF9800"
+          C1: "#F4511E"
+          C2: "#F44336"
+    - key: vocabulary
+      title: 重点词汇
+      renderer: table
+      columns:
+        - {key: word, label: 词}
+        - {key: phonetic, label: 音标}
+        - {key: pos, label: 词性}
+        - {key: meaning, label: 释义}
+        - {key: cefr, label: CEFR}

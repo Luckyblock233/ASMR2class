@@ -1,0 +1,48 @@
+# config/languages/ja.yaml —— 日语学习档案
+language: ja
+display_name: 日语
+language_pair:
+  source: ja
+  target: zh
+asr:
+  language_hint: ja
+llm: {}
+# slots:                # 槽位绑定覆盖（优先于全局 slots；留空沿用全局）
+#   translation: local-translator
+#   grammar: my-cloud
+level_hint: JLPT N5-N3，优先讲解当前句子中最实用的句型和助词
+prompts:
+  translate: ja/translate.txt
+  # translate_insttrans: ja/translate_insttrans.txt
+  grammar: ja/grammar.txt
+subtitle:
+  display_order: source_first
+grammar_card:
+  sections:
+    - key: structure
+      title: 句子结构
+      renderer: tree
+    - key: grammar_points
+      title: 语法点
+      renderer: cards
+      title_field: name
+      body_fields:
+        - {key: explanation, label: 讲解}
+        - {key: example, label: 例句}
+      badge:
+        field: jlpt
+        colors:
+          N5: "#4CAF50"
+          N4: "#8BC34A"
+          N3: "#FFC107"
+          N2: "#FF9800"
+          N1: "#F44336"
+    - key: vocabulary
+      title: 重点词汇
+      renderer: table
+      columns:
+        - {key: word, label: 词}
+        - {key: reading, label: 假名读音}
+        - {key: pos, label: 词性}
+        - {key: meaning, label: 释义}
+        - {key: jlpt, label: JLPT}

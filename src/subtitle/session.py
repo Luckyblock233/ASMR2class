@@ -1,0 +1,66 @@
+"""会话记录器：收集句段、接收乱序语法结果并在会话结束落盘。"""
+
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+
+from ..nlp.context_memory import RollingMemory
+from ..profiles.loader import LanguageProfile
+from .document import Segment, SessionDocument
+from .writer import make_session_dir, write_analysis_json, write_srt, write_txt
+
+log = logging.getLogger(__name__)
+
+
+class SessionRecorder:
+    def __init__(self, profile: LanguageProfile, prompt_template_version: int = 0):
+        self.profile = profile
+        self.prompt_template_version = prompt_template_version
+        self.document = SessionDocument(
+            language_profile=profile.name,
+            source_lang=profile.source_lang,
+            target_lang=profile.target_lang,
+            prompt_template_version=prompt_template_version,
+        )
+
+    def add(self, start: float, end: float, source: str, translation: str | None) -> int:
+        """登记首次显示的句子并返回稳定 ID，供异步语法结果回写。"""
+        return self.document.add(start, end, source, translation)
+
+    @property
+    def entries(self) -> list[Segment]:
+        return self.document.segments
+
+    def get_segment(self, segment_id: int) -> Segment | None:
+        return self.document.get(segment_id)
+
+    def save(
+        self,
+        output_root: Path,
+        session_name: str,
+        memory: RollingMemory | None = None,
+    ) -> Path | None:
+        """保存全部会话文件，返回输出目录；无内容时不产生目录。"""
+        entries = self.entries
+        if not entries:
+            return None
+        out_dir = make_session_dir(output_root, session_name)
+        write_txt(entries, out_dir / "transcript.txt")
+        write_srt(entries, out_dir / "original.srt", bilingual=False)
+        write_srt(entries, out_dir / "bilingual.srt", bilingual=True)
+        write_analysis_json(
+            entries,
+            out_dir / f"analysis.{self.profile.source_lang}.json",
+            language_profile=self.profile.name,
+            source_lang=self.profile.source_lang,
+            target_lang=self.profile.target_lang,
+            prompt_template_version=self.prompt_template_version,
+            grammar_prompt_template_version=self.document.grammar_prompt_template_version,
+            grammar_provider=self.document.grammar_provider,
+            grammar_model=self.document.grammar_model,
+        )
+        if memory is not None:
+            memory.save(out_dir / "memory.json", language_profile=self.profile.name)
+        log.info("会话文件已保存到 %s", out_dir)
+        return out_dir

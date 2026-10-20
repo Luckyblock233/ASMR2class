@@ -141,3 +141,65 @@ def test_hallucination_phrases_configurable():
     engine = _bare_engine([_FakeSeg(" チャンネル登録お願いします", avg_logprob=-0.1)])
     engine.cfg.hallucination_phrases = ["別のフレーズ"]
     assert engine.transcribe(None)[0] == "チャンネル登録お願いします"
+
+
+# ==================== 幻觉三层压制 ====================
+
+
+def test_transcribe_params_passed_to_engine():
+    """置信度阈值/温度回退链/语种/复读链开关原样传入 transcribe（不再只做事后自判）。"""
+    engine = _bare_engine([])
+    engine.transcribe(None, language="ja")
+    kw = engine._model.kwargs
+    assert kw["language"] == "ja"
+    assert kw["condition_on_previous_text"] is False
+    assert kw["vad_filter"] is False  # VAD 前置过滤已在断句层完成
+    assert kw["no_speech_threshold"] == engine.cfg.no_speech_threshold
+    assert kw["log_prob_threshold"] == engine.cfg.log_prob_threshold
+    assert kw["compression_ratio_threshold"] == engine.cfg.compression_ratio_threshold
+    assert kw["temperature"] == [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]  # 温度回退链
+
+
+def test_param_spelling_matches_faster_whisper_signature():
+    """参数拼写验证：faster-whisper 是 log_prob_threshold（openai-whisper 是
+    logprob_threshold）；拼错会被静默忽略，这里用真实签名守住。"""
+    import inspect
+
+    from faster_whisper import WhisperModel
+
+    params = set(inspect.signature(WhisperModel.transcribe).parameters)
+    for name in (
+        "language", "beam_size", "vad_filter", "condition_on_previous_text",
+        "temperature", "no_speech_threshold", "log_prob_threshold",
+        "compression_ratio_threshold",
+    ):
+        assert name in params, f"faster-whisper transcribe 缺少参数 {name}（拼写漂移？）"
+
+
+def test_fold_repetitions():
+    from src.asr.engine import fold_repetitions
+
+    # 整段复读 → 折叠为一份
+    assert fold_repetitions("谢谢观看 谢谢观看 谢谢观看") == "谢谢观看"
+    assert fold_repetitions("ですね。ですね。ですね。ですね。") == "ですね。"
+    # 尾部复读 → 折叠复读部分（黏着语：原句结尾的首次出现保留）
+    assert fold_repetitions("今日はいい天気ですね ですね ですね ですね") == "今日はいい天気ですね"
+    # 正常文本不动
+    assert fold_repetitions("今日は天気がいいですね") == "今日は天気がいいですね"
+    assert fold_repetitions("わくわく") == "わくわく"  # 单元 <2 字符不折叠
+    assert fold_repetitions("短い") == "短い"
+    assert fold_repetitions("") == ""
+
+
+def test_looped_blacklist_phrase_dropped_after_folding():
+    """复读循环产出的黑名单句（如结尾客套话 ×N）：折叠后仍命中 → 整段丢弃。"""
+    engine = _bare_engine([
+        _FakeSeg(" thank you for watching " * 4, avg_logprob=-0.1, no_speech_prob=0.1),
+    ])
+    assert engine.transcribe(None)[0] == ""
+
+    # 非黑名单复读：折叠保留一份（不整段丢弃）
+    engine = _bare_engine([
+        _FakeSeg("とても とても とても 楽しい", avg_logprob=-0.1),
+    ])
+    assert engine.transcribe(None)[0] == "とても 楽しい"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import bisect
 import copy
 import json
 import threading
@@ -13,6 +14,11 @@ ANALYSIS_NONE = "none"
 ANALYSIS_PENDING = "pending"
 ANALYSIS_READY = "ready"
 ANALYSIS_FAILED = "failed"
+
+TRANSLATION_NONE = "none"        # 未启用翻译/无译文（非错误）
+TRANSLATION_PENDING = "pending"  # ASR 句已出现，翻译在途
+TRANSLATION_READY = "ready"
+TRANSLATION_FAILED = "failed"
 
 
 @dataclass
@@ -30,6 +36,10 @@ class Segment:
     extra: dict[str, Any] = field(default_factory=dict)
     analysis_status: str = ANALYSIS_NONE
     analysis_error: str = ""
+    translation_status: str = TRANSLATION_NONE
+    translation_error: str = ""
+    asr_ms: float = 0.0        # 该句 ASR 转写耗时（毫秒）
+    translate_ms: float = 0.0  # 所在翻译块耗时（毫秒，块内各句相同）
 
     @property
     def segment_id(self) -> int:
@@ -93,14 +103,62 @@ class SessionDocument:
             segment = self._by_id.get(segment_id)
             return segment.snapshot() if segment is not None else None
 
-    def add(self, start: float, end: float, source: str, translation: str | None) -> int:
+    def add(
+        self,
+        start: float,
+        end: float,
+        source: str,
+        translation: str | None,
+        *,
+        translation_status: str | None = None,
+        asr_ms: float = 0.0,
+    ) -> int:
         with self._lock:
             segment_id = self._next_id
             self._next_id += 1
-            segment = Segment(start, end, source, translation, id=segment_id)
+            if translation_status is None:
+                translation_status = TRANSLATION_READY if translation else TRANSLATION_NONE
+            segment = Segment(
+                start, end, source, translation,
+                id=segment_id,
+                translation_status=translation_status,
+                asr_ms=asr_ms,
+            )
             self._segments.append(segment)
             self._by_id[segment_id] = segment
             return segment_id
+
+    def update_translation(
+        self,
+        segment_id: int,
+        translation: str | None,
+        *,
+        status: str = TRANSLATION_READY,
+        error: str = "",
+        translate_ms: float = 0.0,
+    ) -> Segment:
+        """翻译回调按稳定 ID 更新译文/状态/耗时；失败只影响该句。"""
+        with self._lock:
+            segment = self._require(segment_id)
+            segment.translation = translation
+            segment.translation_status = status
+            segment.translation_error = error
+            segment.translate_ms = translate_ms
+            return segment.snapshot()
+
+    def segment_at(self, seconds: float) -> Segment | None:
+        """按时间轴查询句段（回放高亮）；时间不改变稳定 ID 主键。"""
+        with self._lock:
+            if not self._segments:
+                return None
+            starts = [s.start for s in self._segments]
+            index = bisect.bisect_right(starts, seconds) - 1
+            if index < 0:
+                return None
+            segment = self._segments[index]
+            if seconds <= segment.end:
+                return segment.snapshot()
+            return None
 
     def add_loaded(self, segment: Segment) -> None:
         """加载已有句段；保留文件中的 ID，并恢复下一个可用 ID。"""
@@ -178,16 +236,25 @@ def _document_from_analysis(path: Path) -> SessionDocument:
     for index, raw in enumerate(payload["segments"], 1):
         if not isinstance(raw, dict):
             raise ValueError(f"分析文件第 {index} 句不是对象：{path}")
+        translation = raw.get("translation")
+        translation_status = str(raw.get("translation_status") or "")
+        if not translation_status:
+            # 旧版分析文件无翻译状态字段：按译文存在性推断
+            translation_status = TRANSLATION_READY if translation else TRANSLATION_NONE
         segment = Segment(
             id=int(raw.get("id") or index),
             start=parse_srt_timestamp(str(raw["start"])),
             end=parse_srt_timestamp(str(raw["end"])),
             source=str(raw.get("source") or ""),
-            translation=raw.get("translation"),
+            translation=translation,
             structure=raw.get("structure"),
             grammar_points=list(raw.get("grammar_points") or []),
             vocabulary=list(raw.get("vocabulary") or []),
             extra=dict(raw.get("extra") or {}),
+            translation_status=translation_status,
+            translation_error=str(raw.get("translation_error") or ""),
+            asr_ms=float(raw.get("asr_ms") or 0.0),
+            translate_ms=float(raw.get("translate_ms") or 0.0),
         )
         doc.add_loaded(segment)
     return doc

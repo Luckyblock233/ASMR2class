@@ -71,6 +71,8 @@ asr:
   log_prob_threshold: -1.0
   compression_ratio_threshold: 2.4   # 重复性幻觉（压缩比异常高）直接丢弃
   condition_on_previous: false       # true 会让幻觉句把后续段落带偏，流式场景保持关闭
+  # 温度回退链：低质量窗口按链升温重试（[0.0] = 关闭回退，固定贪心）
+  temperature_fallback: [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
   # 幻觉短语黑名单：形态固定的视频结尾客套话（归一化后包含匹配即丢弃，误杀时删条目）
   hallucination_phrases: ["視聴してくださって", "ご視聴ありがとう", "最後までご視聴",
                           "最後まで見てくださって", "チャンネル登録",
@@ -121,7 +123,25 @@ context:
 session:
   default_profile: ja # 默认语言档案（config/languages/<name>.yaml）
 
-# ---- 界面（M2 悬浮窗）----
+# ---- 界面（M2 悬浮窗 / M3 完整 A-D 悬浮窗）----
+# 外观个性化收敛为两项：主题（dark/light 预定义配色）+ 背景不透明度。
+# 语言档案可用 appearance: 节覆盖下列项（档案优先，未覆盖回落到这里）。
 ui:
   overlay: true       # 实时模式显示置顶半透明字幕悬浮窗
-  opacity: 0.85       # 初始透明度（0.2-1.0，运行中可用悬浮窗按钮调整）
+  theme: dark         # 主题：dark | light（配色/字号由主题预定义）
+  opacity: 0.85       # 旧版整窗透明度；仅作为 background_opacity 的迁移输入
+  # background_opacity: 0.85    # 背景不透明度（0.2-1.0），留空沿用 opacity
+  line_spacing: 1.15            # 行距倍数
+  window_width: 720             # 悬浮窗初始尺寸
+  window_height: 480
+  show_bar_a: true              # A 栏：控制栏
+  show_bar_b: true              # B 栏：语言档案/槽位栏
+  show_bar_c: true              # C 栏：运行状态栏
+  auto_scroll: true             # 新句自动滚动到底（用户上翻时自动暂停跟随）
+  compact_mode: false           # 紧凑模式
+  ui_language: zh_CN            # UI 文案语言：zh_CN | en
+  view_capacity: 200            # 实时视图句块容量上限（文档仍完整保存）
+  # C 栏健康阈值：≤good 绿色、good–warn 黄色、>warn 红色（扫一眼颜色即知健康度）
+  latency_good_ms: 500          # ASR/翻译平均耗时良好阈值
+  latency_warn_ms: 1000         # 超过该值显示红色
+  ram_warn_percent: 85          # RAM 占用超过该百分比显示橙色

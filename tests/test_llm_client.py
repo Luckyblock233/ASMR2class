@@ -93,3 +93,17 @@ def test_4xx_no_retry(monkeypatch):
 def test_incomplete_config_rejected():
     with pytest.raises(ValueError, match="不完整"):
         LLMClient(LLMConfig(base_url="", api_key="", model=""))
+
+
+def test_last_error_recorded_and_cleared(monkeypatch):
+    """失败记录 last_error（状态点 tooltip），成功后清空。"""
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    fake = FakeOpenAI([conn_err(), conn_err(), conn_err(), make_response("恢复")])
+    client = LLMClient(make_cfg(), client=fake)
+    with pytest.raises(APIConnectionError):
+        client.chat("prompt")
+    assert "APIConnectionError" in client.last_error
+    assert not client.online
+    client.chat("prompt")
+    assert client.last_error == ""
+    assert client.online

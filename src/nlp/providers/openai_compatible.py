@@ -29,6 +29,11 @@ class OpenAICompatibleProvider(ProviderBase):
     def online(self) -> bool:
         return self._client.online
 
+    @property
+    def last_error(self) -> str:
+        """最近一次请求失败原因（状态点 tooltip / 日志查看）。"""
+        return self._client.last_error
+
     def ensure_available(self) -> None:
         ping_cfg = LLMConfig(
             base_url=self.cfg.base_url,

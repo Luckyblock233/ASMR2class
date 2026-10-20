@@ -18,6 +18,8 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+import numpy as np
+
 from .asr.engine import ASREngine
 from .asr.streamer import ASRStreamer, Sentence
 from .audio.base import RingBuffer
@@ -156,6 +158,112 @@ def _build_vad(cfg: GlobalConfig):
     return vad
 
 
+def rollover_profile(
+    runtime: dict,
+    new_profile_name: str,
+    *,
+    cfg: GlobalConfig,
+    slots,
+    streamer,
+    debug_hook=None,
+    output_root: Path | None = None,
+    session_name: str = "",
+    auto_lang: bool = False,
+    rollover_lock: threading.Lock | None = None,
+) -> tuple[object | None, str | None]:
+    """语言档案运行中切换的会话滚动（交接文档 §4.2）。
+
+    流程：暂停接收新 ASR 句 → 冲刷旧 Blocker → 排空旧语法任务 → 保存旧会话
+    → 重新解析档案级槽位并换绑 → 重建 Translator/RollingMemory/GrammarAnalyzer/
+    SessionRecorder/Blocker → 更新 ASR 语种提示 → 恢复运行。
+    旧会话完整保留，新会话使用新档案，绝不混写两种源语言的分析文件。
+
+    runtime 是可变字典，键：profile/translator/grammar/recorder/blocker/on_block；
+    回调闭包必须读 runtime 而不是捕获旧实例。返回 (新档案, None) 或 (None, 错误信息)。
+    """
+    from .nlp.blocker import Blocker
+    from .nlp.grammar import GrammarAnalyzer
+    from .nlp.slots import resolve_slots
+    from .subtitle.session import SessionRecorder
+
+    lock = rollover_lock or threading.Lock()
+    with lock:
+        old_profile = runtime["profile"]
+        if new_profile_name == old_profile.name:
+            return old_profile, None
+        try:
+            new_profile = get_profile(cfg.languages_dir, new_profile_name)
+        except KeyError as e:
+            return None, str(e)
+
+        streamer.set_paused(True)
+        try:
+            blocker = runtime.get("blocker")
+            if blocker is not None:
+                blocker.flush()  # 冲刷残余句（用旧 Translator 完成在途翻译）
+            grammar = runtime.get("grammar")
+            if grammar is not None:
+                grammar.drain()
+            translator = runtime.get("translator")
+            out_dir = runtime["recorder"].save(
+                output_root or cfg.root / "output",
+                session_name or old_profile.name,
+                memory=translator.memory
+                if translator is not None and translator.cfg.memory.enabled
+                else None,
+            )
+            if out_dir:
+                print(f"旧会话已保存：{out_dir}")
+
+            if slots is not None:
+                slots.rebind(resolve_slots(cfg.slots, new_profile.slots, slots.registry))
+
+            tpl_version = 0
+            if translator is not None:
+                from .nlp.translate import Translator
+
+                new_translator = Translator(
+                    slots.translation_provider,
+                    PromptEngine(cfg.prompts_dir),
+                    new_profile,
+                    cfg.context,
+                    debug=debug_hook,
+                    lease=slots.translation_lease,
+                )
+                try:
+                    tpl_path = new_translator.prompts.resolve(
+                        new_profile.prompt_path("translate"), "translate"
+                    )
+                    tpl_version = new_translator.prompts.template_version(tpl_path)
+                except Exception:  # noqa: BLE001
+                    pass
+                runtime["translator"] = new_translator
+
+            recorder = SessionRecorder(new_profile, prompt_template_version=tpl_version)
+            runtime["recorder"] = recorder
+            runtime["grammar"] = (
+                GrammarAnalyzer(
+                    slots.grammar_provider,
+                    PromptEngine(cfg.prompts_dir),
+                    new_profile,
+                    recorder.document,
+                    on_update=runtime.get("on_grammar_update"),
+                    lease=slots.grammar_lease,
+                )
+                if slots is not None
+                else None
+            )
+            if runtime.get("blocker") is not None:
+                merged_ctx = cfg.context.merged(new_profile.context)
+                runtime["blocker"] = Blocker(merged_ctx.block, runtime["on_block"])
+            runtime["profile"] = new_profile
+            streamer.language_hint = None if auto_lang else new_profile.language_hint
+            print(f"已切换语言档案：{new_profile.display_name}（{old_profile.display_name} 会话已保存）")
+            return new_profile, None
+        finally:
+            streamer.set_paused(False)
+
+
 def run(args: argparse.Namespace) -> int:
     cfg = load_config(Path(args.root) if args.root else None)
     profile = get_profile(cfg.languages_dir, args.profile or cfg.default_profile)
@@ -165,6 +273,7 @@ def run(args: argparse.Namespace) -> int:
     registry = None
     slots = None
     translator = None
+    debug_hook: Callable[[str], None] | None = None
     if not args.no_translate or args.grammar:
         from .nlp.providers import SLOT_GRAMMAR, SLOT_TRANSLATION, ProviderRegistry
         from .nlp.slots import ModelSlots, resolve_slots
@@ -218,6 +327,7 @@ def run(args: argparse.Namespace) -> int:
                 profile,
                 cfg.context,
                 debug=debug_hook,
+                lease=slots.translation_lease,
             )
             if args.debug:
                 print("⚙ debug 模式：每次 LLM 请求/响应将完整输出（可重定向 > debug.log 2>&1 离线分析）")
@@ -256,29 +366,80 @@ def run(args: argparse.Namespace) -> int:
             pass
     recorder = SessionRecorder(profile, prompt_template_version=tpl_version)
 
-    # ---- 悬浮窗（FR-3.1/3.2）----
+    # 运行时指标：采集线程只写快照，UI 每秒读取（见 telemetry 模块）
+    from .telemetry import RuntimeMetrics
+
+    metrics = RuntimeMetrics()
+
+    # 可滚动运行态：档案切换（rollover_profile）整体替换这里的实例，
+    # 所有回调闭包必须读 runtime 而不是捕获旧实例。
+    runtime: dict = {
+        "profile": profile,
+        "translator": translator,
+        "grammar": None,
+        "recorder": recorder,
+        "blocker": None,
+        "on_block": None,
+        "on_grammar_update": None,
+    }
+    rollover_lock = threading.Lock()
+
+    # ---- 悬浮窗（FR-3.1/3.2 + M3 完整 A–D 栏）----
     overlay = None
+    sampler = None
     use_overlay = cfg.ui.overlay and not args.no_overlay
     if use_overlay:
+        from .telemetry import SystemSampler
+        from .ui.i18n import set_language
         from .ui.overlay import OverlayUnavailableError, create_overlay
+        from .ui.settings import SettingsController
 
+        set_language(cfg.ui.ui_language, cfg.root / "config" / "locales")
+        merged_ui = cfg.ui.merged(profile.appearance)  # 档案外观覆盖 > 全局
+        controller = (
+            SettingsController(
+                cfg,
+                registry,
+                slots,
+                profile,
+                memory_provider=lambda: (
+                    runtime["translator"].memory
+                    if runtime["translator"] is not None
+                    else None
+                ),
+            )
+            if slots is not None and registry is not None
+            else None
+        )
+        sampler = SystemSampler()
         try:
             overlay = create_overlay(
                 display_order=profile.subtitle.get("display_order", "source_first"),
                 opacity=cfg.ui.opacity,
                 profile=profile,
+                ui=merged_ui,
+                controller=controller,
+                metrics=metrics,
+                sampler=sampler,
+                confirm_exit=True,
+                profiles=controller.available_profiles() if controller is not None else None,
             )
         except OverlayUnavailableError as e:
             print(f"⚠ 悬浮窗不可用（{e}），退回纯控制台模式")
 
     # ---- M3 语法分析：始终异步，自动分析需 --grammar 显式开启 ----
+    # 分析器在 slots 可用时始终创建（手动右键分析入口始终在线）；
+    # 自动提交前检查当前绑定，未绑定时不制造必然失败的任务。
     grammar = None
-    if slots is not None and resolution.provider_id(SLOT_GRAMMAR):
+    on_grammar_update: Callable[[object], None] | None = None
+    if slots is not None:
         from .nlp.grammar import GrammarAnalyzer
 
-        def on_grammar_update(segment):
+        def _emit_grammar_update(segment):
             if overlay is not None:
                 overlay.analysis_ready.emit(segment)
+
+        on_grammar_update = _emit_grammar_update
 
         grammar = GrammarAnalyzer(
             slots.grammar_provider,
@@ -286,15 +447,24 @@ def run(args: argparse.Namespace) -> int:
             profile,
             recorder.document,
             on_update=on_grammar_update,
+            lease=slots.grammar_lease,
         )
         if overlay is not None:
-            overlay.set_grammar_enabled(True)
+            overlay.set_grammar_enabled(grammar.available)
             overlay.analysis_requested.connect(grammar.submit)
+        if args.grammar and not grammar.available:
+            print("⚠ 语法槽未绑定，自动语法分析停用；识别与翻译不受影响。")
     elif args.grammar:
         print("⚠ 语法槽未绑定，自动语法分析停用；识别与翻译不受影响。")
 
+    # 填充可滚动运行态（runtime 已在悬浮窗之前创建）
+    runtime["grammar"] = grammar
+    runtime["on_grammar_update"] = on_grammar_update
+
     state = {"online": True}
     state_lock = threading.Lock()
+
+    from .subtitle.document import TRANSLATION_FAILED, TRANSLATION_NONE, TRANSLATION_READY
 
     def print_sentence(s: Sentence, translation: str | None) -> None:
         line = f"[{fmt_ts(s.start)} → {fmt_ts(s.end)}] {s.text}"
@@ -302,12 +472,19 @@ def run(args: argparse.Namespace) -> int:
             line += f"\n{'':>16}{translation}"
         print(line, flush=True)
 
-    def emit_sentence(s: Sentence, translation: str | None) -> None:
-        print_sentence(s, translation)
-        segment_id = recorder.add(s.start, s.end, s.text, translation)
+    def register_sentence(s: Sentence) -> None:
+        """ASR 句首次出现：立即登记稳定 ID 并显示原文/翻译占位。"""
+        recorder = runtime["recorder"]
+        grammar = runtime["grammar"]
+        if runtime["translator"] is not None:
+            segment_id = recorder.add_pending(s.start, s.end, s.text, asr_ms=s.asr_ms)
+        else:
+            segment_id = recorder.add(s.start, s.end, s.text, None, asr_ms=s.asr_ms)
+            print_sentence(s, None)
+        s.segment_id = segment_id
         if overlay is not None:
             overlay.upsert_segment.emit(recorder.get_segment(segment_id))
-        if grammar is not None and args.grammar:
+        if grammar is not None and args.grammar and runtime["translator"] is None and grammar.available:
             grammar.submit(segment_id)
 
     def emit_status(online: bool) -> None:
@@ -323,16 +500,47 @@ def run(args: argparse.Namespace) -> int:
         from .nlp.blocker import Blocker
 
         def on_block(block: list[Sentence]) -> None:
+            # 入口快照当前运行态：与档案切换并发时，旧块仍回写旧文档/旧语法器
+            translator = runtime["translator"]
+            recorder = runtime["recorder"]
+            grammar = runtime["grammar"]
+            # Blocker 携带登记时的稳定 ID，翻译完成后按 ID 回写（不靠文本/时间匹配）
+            started = time.perf_counter()
             results = translator.translate_block([s.text for s in block])
+            block_ms = (time.perf_counter() - started) * 1000
             emit_status(translator.online)
+            bound = translator.bound
             for s, r in zip(block, results):
-                emit_sentence(s, r.translation)
+                ok = bool(r.translation)
+                metrics.record_translation(block_ms, ok)
+                if not bound:
+                    status, error = TRANSLATION_NONE, ""
+                elif ok:
+                    status, error = TRANSLATION_READY, ""
+                else:
+                    status, error = TRANSLATION_FAILED, "翻译失败或服务不可用"
+                segment = recorder.update_translation(
+                    s.segment_id, r.translation,
+                    status=status, error=error, translate_ms=block_ms,
+                )
+                print_sentence(s, r.translation)
+                if overlay is not None:
+                    overlay.upsert_segment.emit(segment)
+                if grammar is not None and args.grammar and grammar.available:
+                    grammar.submit(s.segment_id)
 
-        blocker = Blocker(cfg.context.block, on_block)
-        on_sentence = blocker.feed
+        runtime["on_block"] = on_block
+        # Blocker 与 Translator 使用同一份档案合并后的 context 配置
+        blocker = Blocker(cfg.context.merged(profile.context).block, on_block)
+        runtime["blocker"] = blocker
+
+        def feed_sentence(s: Sentence) -> None:
+            register_sentence(s)
+            runtime["blocker"].feed(s)
+
+        on_sentence = feed_sentence
     else:
-        blocker = None
-        on_sentence = lambda s: emit_sentence(s, None)  # noqa: E731
+        on_sentence = register_sentence
 
     streamer = ASRStreamer(
         engine,
@@ -340,12 +548,62 @@ def run(args: argparse.Namespace) -> int:
         language_hint=None if args.auto_lang else profile.language_hint,
         on_sentence=on_sentence,
         vad_fn=_build_vad(cfg),
+        metrics=metrics,
     )
+    if overlay is not None:
+        overlay.pause_toggled.connect(streamer.set_paused)
+        overlay.set_asr_info(f"ASR {info.model_size} @ {info.device}（{info.compute_type}）")
+
+        def _do_profile_switch(name: str) -> None:
+            """worker 线程执行会话滚动；GUI 更新经 post_to_gui 回主线程。"""
+            new_profile, err = rollover_profile(
+                runtime,
+                name,
+                cfg=cfg,
+                slots=slots,
+                streamer=streamer,
+                debug_hook=debug_hook if args.debug else None,
+                output_root=Path(args.output) if args.output else cfg.root / "output",
+                session_name=args.session_name or "",
+                auto_lang=args.auto_lang,
+                rollover_lock=rollover_lock,
+            )
+            if err is not None:
+                log.warning("档案切换失败：%s", err)
+                overlay.post_to_gui(lambda: overlay.notify_profile_error(name, err))
+                return
+            assert new_profile is not None
+            merged = cfg.ui.merged(new_profile.appearance)
+
+            def apply():
+                overlay.apply_profile(
+                    new_profile,
+                    merged_ui=merged,
+                    notice=f"已切换语言档案：{new_profile.display_name}",
+                )
+                grammar = runtime["grammar"]
+                overlay.set_grammar_enabled(bool(grammar and grammar.available))
+
+            overlay.post_to_gui(apply)
+
+        overlay.profile_change_requested.connect(
+            lambda name: threading.Thread(
+                target=_do_profile_switch, args=(name,),
+                name="profile-switch", daemon=True,
+            ).start()
+        )
+
+    def metered_write(chunk) -> None:
+        """采集回调只写 RMS 快照（telemetry），不触碰 UI。"""
+        ring.write(chunk)
+        arr = np.asarray(chunk, dtype=np.float32)
+        if arr.size:
+            metrics.record_audio_block(float(np.sqrt(np.mean(arr * arr))))
 
     print(f"音频来源：{args.source}。开始识别，{'关闭悬浮窗' if overlay else 'Ctrl+C'} 结束。\n")
     started = time.monotonic()
     try:
-        source.start(ring.write)
+        source.start(metered_write)
         streamer.start(ring)
         if overlay is not None:
             _run_overlay_loop(overlay, source, args.source)
@@ -368,6 +626,10 @@ def run(args: argparse.Namespace) -> int:
         source.stop()
         streamer.stop()
         try:
+            blocker = runtime["blocker"]
+            grammar = runtime["grammar"]
+            translator = runtime["translator"]
+            recorder = runtime["recorder"]
             if blocker is not None:
                 blocker.flush()  # 先冲刷残余句，再停止接收语法任务
             if grammar is not None:
@@ -389,6 +651,8 @@ def run(args: argparse.Namespace) -> int:
             if out_dir:
                 print(f"会话文件已保存：{out_dir}")
         finally:
+            if sampler is not None:
+                sampler.close()
             if registry is not None:
                 registry.close_all()  # 所有请求和落盘结束后回收本地 Provider
     return 0
@@ -424,23 +688,84 @@ def _run_overlay_loop(overlay, source, source_kind: str) -> None:
 
 
 def run_replay_session(args: argparse.Namespace) -> int:
-    """重载已保存会话，只恢复句块和语法卡，不初始化 ASR/Provider。"""
+    """重载已保存会话（或外部 SRT），不初始化 ASR/Provider；--media 启用媒体回放。"""
     from .subtitle.document import load_session_document
-    from .ui.replay import run_session_preview
+    from .ui.replay import document_from_srt, run_session_preview
 
     cfg = load_config(Path(args.root) if args.root else None)
-    document = load_session_document(args.replay_session)
-    profile_name = args.profile or document.language_profile or cfg.default_profile
-    profile = get_profile(cfg.languages_dir, profile_name)
-    if document.language_profile and document.language_profile != profile.name:
-        raise SystemExit(
-            f"会话使用语言档案 {document.language_profile}，不能按 {profile.name} 重载"
-        )
-    if document.source_lang and document.source_lang != profile.source_lang:
-        raise SystemExit(
-            f"会话源语言 {document.source_lang} 与档案 {profile.name} 的 {profile.source_lang} 不一致"
-        )
-    return run_session_preview(document, profile, cfg.ui.opacity)
+    if args.replay_session:
+        document = load_session_document(args.replay_session)
+        profile_name = args.profile or document.language_profile or cfg.default_profile
+        profile = get_profile(cfg.languages_dir, profile_name)
+        if document.language_profile and document.language_profile != profile.name:
+            raise SystemExit(
+                f"会话使用语言档案 {document.language_profile}，不能按 {profile.name} 重载"
+            )
+        if document.source_lang and document.source_lang != profile.source_lang:
+            raise SystemExit(
+                f"会话源语言 {document.source_lang} 与档案 {profile.name} 的 {profile.source_lang} 不一致"
+            )
+    else:
+        # 外部 SRT 独立回放：完整块读取，保留多行原文
+        document = document_from_srt(args.srt)
+        profile = get_profile(cfg.languages_dir, args.profile or cfg.default_profile)
+    return run_session_preview(
+        document, profile, cfg.ui.opacity, media_path=args.media, ui=cfg.ui
+    )
+
+
+def run_batch(args: argparse.Namespace) -> int:
+    """真正的离线批处理（阶段 5）：独立于 FileSource/RingBuffer 实时模拟。"""
+    from .offline.runner import OfflineRunner
+
+    cfg = load_config(Path(args.root) if args.root else None)
+    profile = get_profile(cfg.languages_dir, args.profile or cfg.default_profile)
+    print(f"语言档案：{profile.display_name}（{profile.source_lang} → {profile.target_lang}）")
+
+    from .nlp.providers import SLOT_GRAMMAR, SLOT_TRANSLATION, ProviderRegistry
+    from .nlp.slots import ModelSlots, resolve_slots
+
+    _apply_profile_llm_override(cfg, profile)
+    registry = ProviderRegistry.from_config(cfg)
+    resolution = resolve_slots(cfg.slots, profile.slots, registry)
+    slots = ModelSlots(registry, resolution)
+    for line in slots.status_lines():
+        print(line)
+    for slot in (SLOT_TRANSLATION, SLOT_GRAMMAR):
+        pid = resolution.provider_id(slot)
+        if not pid:
+            continue
+        if slot == SLOT_GRAMMAR and not args.grammar:
+            continue
+        err = registry.check_health(pid)
+        if err:
+            print(f"⚠ {err}")
+
+    print("正在加载 ASR 模型…")
+    from .asr.engine import ModelLoadError
+
+    try:
+        engine = ASREngine(cfg.asr)
+    except ModelLoadError as e:
+        print(f"\n✗ ASR 模型加载失败：\n{e}")
+        return 1
+    info = engine.info
+    print(f"ASR：{info.model_size} @ {info.device}（{info.compute_type}）")
+
+    runner = OfflineRunner(
+        cfg,
+        profile,
+        output_root=Path(args.output) if args.output else cfg.root / "output",
+        engine=engine,
+        vad_fn=_build_vad(cfg),
+        slots=slots,
+        grammar_enabled=args.grammar,
+        session_name=args.session_name or "",
+    )
+    try:
+        return runner.run(args.batch)
+    finally:
+        registry.close_all()  # 全部文件完成（翻译/语法排空）后回收本地 Provider
 
 
 def main() -> int:
@@ -458,7 +783,13 @@ def main() -> int:
     parser.add_argument("--grammar", action="store_true",
                         help="自动后台语法分析；未开启时仍可在悬浮窗右键逐句分析")
     parser.add_argument("--replay-session", metavar="SESSION_DIR",
-                        help="重载会话目录中的 analysis JSON/SRT，仅显示句块和语法卡")
+                        help="重载会话目录中的 analysis JSON/SRT，显示句块和语法卡")
+    parser.add_argument("--media", metavar="MEDIA_PATH",
+                        help="回放模式加载的媒体文件（mp4/mkv/mp3/wav/m4a 等）")
+    parser.add_argument("--srt", metavar="SRT_PATH",
+                        help="外部 SRT 字幕回放（完整块读取，保留多行；可配合 --media）")
+    parser.add_argument("--batch", nargs="+", metavar="MEDIA_FILE",
+                        help="离线批处理：一个或多个媒体文件（PyAV 解码，非实时模拟）")
     parser.add_argument("--debug", action="store_true",
                         help="调试模式：完整输出每次 LLM 请求/响应（prompt 全文、原始响应、token 用量）")
     parser.add_argument("--auto-lang", action="store_true", help="ASR 自动检测语种（默认用档案指定）")
@@ -479,8 +810,10 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         stream=sys.stderr,
     )
-    if args.replay_session:
+    if args.replay_session or args.srt:
         return run_replay_session(args)
+    if args.batch:
+        return run_batch(args)
     if args.list_devices:
         return list_devices()
     if args.list_providers:

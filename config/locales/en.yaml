@@ -1,0 +1,124 @@
+settings.title: Settings
+settings.tab.providers: Models & Slots
+settings.tab.appearance: Appearance
+settings.apply: Apply
+settings.slots.group: Slot Bindings
+settings.slots.unbound: (unbound)
+settings.slots.profile_override: ' (profile override: this slot is pinned by the language
+  profile; edit the profile YAML)'
+settings.providers.field.name: Name
+settings.providers.field.type: Type
+settings.providers.field.capabilities: Capabilities
+settings.providers.field.timeout: Timeout (s)
+settings.providers.field.retries: Retries
+settings.providers.cap.translation: Translation
+settings.providers.cap.grammar: Grammar
+settings.providers.cap.glossary: Glossary constraint
+settings.providers.local_notice: Local managed fields (gguf_path/server_args…) are
+  edited in config.yaml; changes here keep the existing local section.
+settings.providers.new: New
+settings.providers.save: Save (applies after health check)
+settings.providers.delete: Delete
+settings.providers.delete_confirm: Delete this provider?
+settings.providers.health: Health check
+settings.health.checking: Checking health…
+settings.appearance.background_opacity: Background opacity
+settings.appearance.line_spacing: Line spacing
+settings.appearance.window_size: Window size
+settings.appearance.bars: Visible bars
+settings.appearance.bar_a: Bar A (controls)
+settings.appearance.bar_b: Bar B (models)
+settings.appearance.bar_c: Bar C (status)
+settings.appearance.auto_scroll: Auto-scroll to bottom on new sentences
+settings.appearance.compact_mode: Compact mode
+settings.appearance.ui_language: UI language (takes effect after restart)
+settings.appearance.view_capacity: Live view block capacity
+settings.appearance.restore_defaults: Restore defaults
+settings.appearance.restore_confirm: Restore default appearance? Current appearance
+  settings will be overwritten.
+settings.msg.applied: Applied
+settings.msg.profile_locked: This slot is overridden by the current language profile;
+  global change not applied
+settings.msg.provider_missing: Provider does not exist
+settings.msg.capability_mismatch: Capability mismatch
+settings.msg.health_failed: Health check failed; previous binding kept
+settings.msg.health_ok: Health check passed
+settings.msg.save_failed: Failed to save config; previous runtime state kept
+settings.msg.provider_saved: Provider saved
+settings.msg.provider_deleted: Provider deleted
+settings.msg.provider_in_use: Provider is still bound to a slot and cannot be deleted
+settings.msg.provider_id_required: Provider id is required
+settings.msg.provider_incomplete: Provider config incomplete (id, base_url and model
+  are required)
+settings.msg.unknown_slot: Unknown slot
+settings.msg.internal_error: Internal error
+overlay.menu.click_through: Click-through
+overlay.menu.always_on_top: Always on top
+overlay.menu.auto_scroll: Auto-scroll
+overlay.menu.compact: Compact mode
+overlay.menu.subtitles: Show subtitles
+overlay.pause: Pause
+overlay.resume: Resume
+overlay.clear: Clear view
+overlay.settings: Settings
+overlay.clear_confirm: Clear the current view? Saved session data is not affected.
+overlay.exit_confirm: Quit? The current live session will end and be saved.
+overlay.tray.restore: Restore
+overlay.tray.quit: Quit
+overlay.through_on: Click-through enabled; right-click the tray icon to restore
+overlay.through_off: Click-through disabled
+overlay.vram_warn: Low free VRAM; consider CPU inference or a cloud provider
+overlay.services: Services
+overlay.status.legend: ●Running ●Degraded ●Error ○Stopped; click for details
+overlay.status.running: Running
+overlay.status.degraded: Degraded
+overlay.status.error: Error
+overlay.status.stopped: Stopped
+overlay.status.last_error: Last error
+overlay.status.click_detail: Click for details
+overlay.status.detail_title: Service status
+overlay.status.state: State
+overlay.status.active_calls: Active calls
+overlay.profile: Profile
+overlay.profile_switch_failed: Failed to switch language profile
+replay.title: Session Replay
+replay.play: Play/Pause
+replay.open_media: Open media
+replay.media_missing: Media file not found
+replay.media_error: Media playback error
+settings.tab.memory: Memory
+settings.tab.prompt: Prompt
+settings.memory.term: Term
+settings.memory.translation: Translation
+settings.memory.type: Type
+settings.memory.add: Add term
+settings.memory.remove: Remove selected
+settings.memory.reload: Reload
+settings.memory.clear: Clear
+settings.memory.clear_confirm: Clear glossary and style? Takes effect after Apply.
+settings.memory.style: Style notes
+settings.memory.style_locked: (locked by profile preset, read-only)
+settings.memory.live_hint: 'Editing the live session''s rolling memory: applies to
+  the next translation immediately and is saved with the session files on exit.'
+settings.memory.no_live: No live session memory (translation disabled or not in live
+  mode). You can load a memory.json file to edit.
+settings.memory.load_file: Load from file…
+settings.memory.save_file: Save to file…
+settings.memory.editing_file: Editing file
+settings.memory.empty_field: Term and translation must not be empty
+settings.memory.duplicate: Duplicate term
+settings.prompt.dir: Prompt template directory
+settings.prompt.open_dir: Open folder
+settings.prompt.missing: (template not found; falls back to _default)
+settings.prompt.restore: Restore default
+settings.prompt.restore_confirm: Restore the default template? The current file will
+  be backed up as .bak first.
+settings.msg.no_custom_template: The current profile uses the _default template (nothing
+  to restore)
+settings.msg.default_template_missing: Default template missing
+settings.msg.template_restored: Default template restored (previous file backed up
+  as .bak)
+settings.msg.memory_saved: Memory saved
+settings.appearance.theme: Theme
+settings.appearance.theme.dark: Dark
+settings.appearance.theme.light: Light

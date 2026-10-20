@@ -6,6 +6,7 @@ API key 支持环境变量 ASR2CLASS_LLM_API_KEY 覆盖，且不写入文件、�
 
 from __future__ import annotations
 
+import copy
 import os
 import shutil
 from dataclasses import dataclass, field
@@ -117,6 +118,10 @@ class ASRConfig:
     log_prob_threshold: float = -1.0
     compression_ratio_threshold: float = 2.4  # 重复性幻觉（压缩比异常高）直接丢弃
     condition_on_previous: bool = False  # True 会让幻觉句把后续段落带偏，流式场景应关闭
+    # 温度回退链：低质量窗口（no_speech/logprob/compression 触发）按链升温重试
+    temperature_fallback: list[float] = field(
+        default_factory=lambda: [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+    )
     # 幻觉短语黑名单：形态固定的视频结尾客套话（日/英），归一化后包含匹配即丢弃
     hallucination_phrases: list[str] = field(default_factory=lambda: [
         "視聴してくださって", "ご視聴ありがとう", "最後までご視聴", "最後まで見てくださって",
@@ -167,8 +172,61 @@ class MemoryConfig:
 
 @dataclass
 class UIConfig:
+    """界面与外观配置（M3 后续 A–D 悬浮窗）。
+
+    外观个性化收敛为两项：背景不透明度 + 白天/夜间主题（`theme`）。
+    颜色/字号由主题预定义，不再逐项可配。
+    opacity 为旧字段（整窗透明，文字一起变淡）；新实现用 RGBA 背景，
+    background_opacity 留空时把 opacity 当作迁移输入。
+    """
+
     overlay: bool = True     # 悬浮字幕窗开关
-    opacity: float = 0.85    # 初始透明度
+    opacity: float = 0.85    # 旧版整窗透明度（仅作 background_opacity 的迁移输入）
+    theme: str = "dark"      # 主题：dark | light（预定义配色与字号）
+    background_opacity: float | None = None  # 背景不透明度；None = 沿用 opacity
+    line_spacing: float = 1.15             # 行距倍数
+    # 窗口
+    window_width: int = 720
+    window_height: int = 480
+    # A/B/C 栏显隐（A=控制栏 B=模型/档案栏 C=状态栏）
+    show_bar_a: bool = True
+    show_bar_b: bool = True
+    show_bar_c: bool = True
+    auto_scroll: bool = True               # 新句自动滚动到底（用户上翻时自动暂停跟随）
+    compact_mode: bool = False             # 紧凑模式（隐藏 B/C 栏、缩小边距）
+    ui_language: str = "zh_CN"             # UI 文案语言：zh_CN | en
+    view_capacity: int = 200               # 实时视图句块控件容量上限（文档仍完整保存）
+    # C 栏健康阈值（仪表盘颜色：≤good 绿、good–warn 黄、>warn 红）
+    latency_good_ms: int = 500             # ASR/翻译平均耗时良好阈值
+    latency_warn_ms: int = 1000            # 超过该值显示红色
+    ram_warn_percent: int = 85             # RAM 占用超过该百分比显示橙色
+
+    @property
+    def effective_background_opacity(self) -> float:
+        """背景不透明度：新字段优先，否则迁移旧 opacity。"""
+        value = self.background_opacity if self.background_opacity is not None else self.opacity
+        return max(0.2, min(1.0, value))
+
+    def merged(self, override: dict[str, Any] | None) -> "UIConfig":
+        """应用语言档案级外观覆盖，未覆盖项回落全局；空覆盖返回自身。"""
+        if not override:
+            return self
+        merged = copy.copy(self)
+        for key, value in override.items():
+            if not hasattr(merged, key) or value is None:
+                continue  # 未知/空字段忽略，保持向前兼容
+            current = getattr(merged, key)
+            if isinstance(current, bool):
+                value = bool(value)
+            elif isinstance(current, int) and not isinstance(current, bool):
+                value = int(value)
+            elif isinstance(current, float):
+                value = float(value)
+            setattr(merged, key, value)
+        if merged.background_opacity is not None:
+            merged.background_opacity = max(0.2, min(1.0, merged.background_opacity))
+        merged.opacity = max(0.2, min(1.0, merged.opacity))
+        return merged
 
 
 @dataclass
@@ -312,6 +370,7 @@ def load_config(root: Path | None = None) -> GlobalConfig:
         log_prob_threshold=float(asr_raw.get("log_prob_threshold") or -1.0),
         compression_ratio_threshold=float(asr_raw.get("compression_ratio_threshold") or 2.4),
         condition_on_previous=bool(asr_raw.get("condition_on_previous") or False),
+        temperature_fallback=[float(t) for t in asr_raw.get("temperature_fallback") or ASRConfig().temperature_fallback],
         hallucination_phrases=[str(p) for p in asr_raw.get("hallucination_phrases") or ASRConfig().hallucination_phrases],
     )
 
@@ -395,9 +454,27 @@ def load_config(root: Path | None = None) -> GlobalConfig:
                 p.api_key = env_key
 
     ui_raw = raw.get("ui") or {}
+    bg_opacity_raw = ui_raw.get("background_opacity")
+    # 旧配置里的颜色/字体字段（background_color/source_color 等）已被主题取代，
+    # 解析时忽略；保存时不再写回。
     ui = UIConfig(
         overlay=bool(ui_raw.get("overlay") if ui_raw.get("overlay") is not None else True),
         opacity=float(ui_raw.get("opacity") or 0.85),
+        theme=str(ui_raw.get("theme") or "dark"),
+        background_opacity=float(bg_opacity_raw) if bg_opacity_raw is not None else None,
+        line_spacing=float(ui_raw.get("line_spacing") or 1.15),
+        window_width=int(ui_raw.get("window_width") or 720),
+        window_height=int(ui_raw.get("window_height") or 480),
+        show_bar_a=bool(ui_raw.get("show_bar_a") if ui_raw.get("show_bar_a") is not None else True),
+        show_bar_b=bool(ui_raw.get("show_bar_b") if ui_raw.get("show_bar_b") is not None else True),
+        show_bar_c=bool(ui_raw.get("show_bar_c") if ui_raw.get("show_bar_c") is not None else True),
+        auto_scroll=bool(ui_raw.get("auto_scroll") if ui_raw.get("auto_scroll") is not None else True),
+        compact_mode=bool(ui_raw.get("compact_mode") or False),
+        ui_language=str(ui_raw.get("ui_language") or "zh_CN"),
+        view_capacity=int(ui_raw.get("view_capacity") or 200),
+        latency_good_ms=int(ui_raw.get("latency_good_ms") or 500),
+        latency_warn_ms=int(ui_raw.get("latency_warn_ms") or 1000),
+        ram_warn_percent=int(ui_raw.get("ram_warn_percent") or 85),
     )
 
     session_raw = raw.get("session") or {}
@@ -416,40 +493,122 @@ def load_config(root: Path | None = None) -> GlobalConfig:
     )
 
 
+def _atomic_write_yaml(path: Path, raw: dict[str, Any]) -> None:
+    """同目录临时文件 + 原子替换：保存中途崩溃不破坏现有配置。"""
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        yaml.safe_dump(raw, f, allow_unicode=True, sort_keys=False)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def _persistable_api_key(value: str) -> str:
+    """环境变量注入的 API key 不落盘：值与环境变量一致时写回空串。"""
+    env_key = os.environ.get(API_KEY_ENV, "").strip()
+    if env_key and value == env_key:
+        return ""
+    return value
+
+
 def save_llm_config(cfg: GlobalConfig, llm: LLMConfig) -> None:
-    """设置向导写回 LLM 三项到 config.yaml（保留其余字段与注释以外的内容）。
+    """设置向导写回 LLM 三项到 config.yaml（原子写入，保留其余字段）。
 
     注意：yaml 往返会丢失注释；向导只在首次配置时运行，可接受。
+    环境变量注入的密钥不会写入文件。
     """
     path = cfg.config_file
     raw = _load_yaml(path)
     raw["llm"] = {
         "base_url": llm.base_url,
-        "api_key": llm.api_key,
+        "api_key": _persistable_api_key(llm.api_key),
         "model": llm.model,
         "timeout_sec": llm.timeout_sec,
         "max_retries": llm.max_retries,
     }
-    with open(path, "w", encoding="utf-8") as f:
-        yaml.safe_dump(raw, f, allow_unicode=True, sort_keys=False)
+    _atomic_write_yaml(path, raw)
+
+
+def save_ui_config(cfg: GlobalConfig, ui: UIConfig) -> None:
+    """外观设置原子写回 config.yaml 的 ui 节；保留其余配置与旧 opacity 字段。"""
+    path = cfg.config_file
+    raw = _load_yaml(path)
+    ui_raw = raw.get("ui")
+    if not isinstance(ui_raw, dict):
+        ui_raw = {}
+    ui_raw.update(
+        {
+            "overlay": ui.overlay,
+            "theme": ui.theme,
+            "background_opacity": round(ui.effective_background_opacity, 3),
+            "line_spacing": ui.line_spacing,
+            "window_width": ui.window_width,
+            "window_height": ui.window_height,
+            "show_bar_a": ui.show_bar_a,
+            "show_bar_b": ui.show_bar_b,
+            "show_bar_c": ui.show_bar_c,
+            "auto_scroll": ui.auto_scroll,
+            "compact_mode": ui.compact_mode,
+            "ui_language": ui.ui_language,
+            "view_capacity": ui.view_capacity,
+            "latency_good_ms": ui.latency_good_ms,
+            "latency_warn_ms": ui.latency_warn_ms,
+            "ram_warn_percent": ui.ram_warn_percent,
+        }
+    )
+    # 主题取代逐项颜色/字体配置：保存时清掉旧字段
+    for legacy in (
+        "background_color", "source_font_family", "source_font_size", "source_color",
+        "translation_font_family", "translation_font_size", "translation_color",
+    ):
+        ui_raw.pop(legacy, None)
+    raw["ui"] = ui_raw
+    _atomic_write_yaml(path, raw)
+
+
+def save_slots_config(cfg: GlobalConfig, slots: SlotsConfig) -> None:
+    """只写回槽位绑定（原子写入），不触碰 providers 节。"""
+    path = cfg.config_file
+    raw = _load_yaml(path)
+    raw["slots"] = {"translation": slots.translation, "grammar": slots.grammar}
+    _atomic_write_yaml(path, raw)
+
+
+def delete_provider_config(cfg: GlobalConfig, provider_id: str) -> None:
+    """从 config.yaml 删除 provider 声明（原子写入）；槽位绑定由调用方先行解除。"""
+    path = cfg.config_file
+    raw = _load_yaml(path)
+    providers_raw = [p for p in (raw.get("providers") or []) if isinstance(p, dict)]
+    raw["providers"] = [p for p in providers_raw if p.get("id") != provider_id]
+    _atomic_write_yaml(path, raw)
 
 
 def save_provider_config(
     cfg: GlobalConfig, provider: ProviderConfig, slots: SlotsConfig
 ) -> None:
-    """设置向导写回：新增/替换一个 provider 声明并更新槽位绑定。"""
+    """设置向导写回：新增/替换一个 provider 声明并更新槽位绑定（原子写入）。
+
+    已存在的同 id 条目保留未知字段与 timeout/max_retries 等，只覆盖本函数负责的键；
+    环境变量注入的密钥不会写入文件。
+    """
     path = cfg.config_file
     raw = _load_yaml(path)
     providers_raw = [p for p in (raw.get("providers") or []) if isinstance(p, dict)]
-    entry: dict[str, Any] = {
-        "id": provider.id,
-        "name": provider.name,
-        "type": provider.type,
-        "base_url": provider.base_url,
-        "api_key": provider.api_key,
-        "model": provider.model,
-        "capabilities": provider.capabilities,
-    }
+    existing = next((p for p in providers_raw if p.get("id") == provider.id), None)
+    entry: dict[str, Any] = dict(existing) if existing else {}
+    entry.update(
+        {
+            "id": provider.id,
+            "name": provider.name,
+            "type": provider.type,
+            "base_url": provider.base_url,
+            "api_key": _persistable_api_key(provider.api_key),
+            "model": provider.model,
+            "capabilities": provider.capabilities,
+            "timeout_sec": provider.timeout_sec,
+            "max_retries": provider.max_retries,
+        }
+    )
     if provider.params:
         entry["params"] = provider.params
     if provider.local is not None:
@@ -465,5 +624,4 @@ def save_provider_config(
     providers_raw.append(entry)
     raw["providers"] = providers_raw
     raw["slots"] = {"translation": slots.translation, "grammar": slots.grammar}
-    with open(path, "w", encoding="utf-8") as f:
-        yaml.safe_dump(raw, f, allow_unicode=True, sort_keys=False)
+    _atomic_write_yaml(path, raw)

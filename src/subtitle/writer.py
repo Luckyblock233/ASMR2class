@@ -73,6 +73,10 @@ def write_analysis_json(
                 "end": srt_timestamp(e.end),
                 "source": e.source,
                 "translation": e.translation,
+                "translation_status": e.translation_status,
+                "translation_error": e.translation_error,
+                "asr_ms": e.asr_ms,
+                "translate_ms": e.translate_ms,
                 **e.analysis_payload(),
             }
             for index, e in enumerate(entries, 1)

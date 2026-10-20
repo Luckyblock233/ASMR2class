@@ -25,6 +25,7 @@ class LanguageProfile:
     subtitle: dict[str, Any] = field(default_factory=dict)
     context: dict[str, Any] = field(default_factory=dict)  # context 配置覆盖（FR-C1.2）
     slots: dict[str, Any] = field(default_factory=dict)  # 槽位绑定覆盖（档案优先于全局 slots）
+    appearance: dict[str, Any] = field(default_factory=dict)  # 外观覆盖（合并到全局 ui 配置）
     style_preset: str = ""  # 档案预设风格，非空则优先于 LLM 推断并锁定（§8 风险对策）
     raw: dict[str, Any] = field(default_factory=dict)
     path: Path | None = None
@@ -50,6 +51,7 @@ def _parse(path: Path) -> LanguageProfile:
         subtitle=raw.get("subtitle") or {},
         context=raw.get("context") or {},
         slots=raw.get("slots") or {},
+        appearance=raw.get("appearance") or {},
         style_preset=str(raw.get("style_preset") or ""),
         raw=raw,
         path=path,

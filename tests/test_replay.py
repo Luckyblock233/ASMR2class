@@ -56,7 +56,13 @@ def test_session_preview_restores_blocks_and_opens_card(qapp, monkeypatch):
             block = window.text._blocks[segment_id]
             assert block.source_label.text() == "重载原文"
             assert not block.analysis_action.isEnabled()  # 重载为只读模式
+            # §4.1 手势分离：回放单击 = seek（不弹卡），双击 = 语法卡
+            seeks = []
+            window.seek_requested.connect(seeks.append)
             QTest.mouseClick(block, Qt.MouseButton.LeftButton)
+            assert seeks == [segment_id]
+            assert window.grammar_card is None or not window.grammar_card.isVisible()
+            QTest.mouseDClick(block, Qt.MouseButton.LeftButton)
             assert window.grammar_card is not None
             assert window.grammar_card.isVisible()
             assert window.grammar_card.source_label.text() == "重载原文"

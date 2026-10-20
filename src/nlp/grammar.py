@@ -66,8 +66,12 @@ class GrammarAnalyzer:
         on_update: Callable[[Segment], None] | None = None,
         max_workers: int = 2,
         max_pending: int = 64,
+        lease=None,
     ):
         self._get_provider = provider_getter if callable(provider_getter) else lambda: provider_getter
+        # 可选零参 callable → ContextManager[Provider|None]（ModelSlots.grammar_lease）；
+        # 每次 attempt 重新取租约：换绑后重试自动使用新绑定
+        self._lease = lease
         self.prompts = prompts
         self.profile = profile
         self.document = document
@@ -126,30 +130,13 @@ class GrammarAnalyzer:
         last_error: Exception | None = None
         for attempt in range(2):
             try:
-                provider = self._get_provider()
-                if provider is None:
-                    raise GrammarContractError("语法槽未绑定或 Provider 不可用")
-                template = self.prompts.resolve(self.profile.prompt_path("grammar"), "grammar")
-                prompt = self.prompts.render(
-                    template,
-                    source_lang=self.profile.source_lang,
-                    target_lang=self.profile.target_lang,
-                    sentence=segment.source,
-                    source=segment.source,
-                    translation=segment.translation or "",
-                    level_hint=str(self.profile.raw.get("level_hint") or ""),
-                )
-                response = provider.chat(prompt, json_mode=True)
-                payload = validate_analysis_payload(_extract_json(response.content))
-                cfg = getattr(provider, "cfg", None)
-                self.document.update_grammar_metadata(
-                    template_version=self.prompts.template_version(template),
-                    provider_id=str(getattr(cfg, "id", "") or ""),
-                    model=str(getattr(cfg, "model", "") or ""),
-                )
-                snapshot = self.document.apply_analysis(segment_id, payload)
-                self._notify(snapshot)
-                return
+                if self._lease is not None:
+                    with self._lease() as provider:
+                        if self._attempt(segment_id, segment, provider):
+                            return
+                else:
+                    if self._attempt(segment_id, segment, self._get_provider()):
+                        return
             except Exception as e:  # 单句失败不得影响其他句或主字幕流
                 last_error = e
                 log.info("语法分析失败（句 %s，第 %s 次）：%s", segment_id, attempt + 1, e)
@@ -159,6 +146,32 @@ class GrammarAnalyzer:
             f"{type(last_error).__name__}: {last_error}" if last_error else "语法分析失败",
         )
         self._notify(snapshot)
+
+    def _attempt(self, segment_id: int, segment: Segment, provider) -> bool:
+        """单次分析尝试；成功回写并返回 True，provider 为 None 时抛契约错误。"""
+        if provider is None:
+            raise GrammarContractError("语法槽未绑定或 Provider 不可用")
+        template = self.prompts.resolve(self.profile.prompt_path("grammar"), "grammar")
+        prompt = self.prompts.render(
+            template,
+            source_lang=self.profile.source_lang,
+            target_lang=self.profile.target_lang,
+            sentence=segment.source,
+            source=segment.source,
+            translation=segment.translation or "",
+            level_hint=str(self.profile.raw.get("level_hint") or ""),
+        )
+        response = provider.chat(prompt, json_mode=True)
+        payload = validate_analysis_payload(_extract_json(response.content))
+        cfg = getattr(provider, "cfg", None)
+        self.document.update_grammar_metadata(
+            template_version=self.prompts.template_version(template),
+            provider_id=str(getattr(cfg, "id", "") or ""),
+            model=str(getattr(cfg, "model", "") or ""),
+        )
+        snapshot = self.document.apply_analysis(segment_id, payload)
+        self._notify(snapshot)
+        return True
 
     def _complete(self, segment_id: int, future: Future) -> None:
         if future.cancelled():

@@ -80,6 +80,9 @@ class Translator:
     provider_getter：零参 callable，每次返回翻译槽当前绑定的 Provider
     （具备 chat()/online；None = 槽位未绑定，翻译停用仅显示原文）。
     兼容旧用法：直接传一个带 chat() 的客户端会自动包装为固定 getter。
+    lease：可选零参 callable，返回 ContextManager[Provider|None]（如
+    ModelSlots.translation_lease）；提供后每次 chat() 都在租约内完成，
+    换绑时旧实例等到本请求结束才回收。
     """
 
     def __init__(
@@ -90,6 +93,7 @@ class Translator:
         context_cfg: ContextConfig | None = None,
         memory: RollingMemory | None = None,
         debug=None,
+        lease=None,
     ):
         if callable(provider_getter):
             self._get_provider: Callable[[], Any] = provider_getter
@@ -99,6 +103,7 @@ class Translator:
         self.profile = profile
         self.debug = debug  # 可调用：接收格式化调试文本（--debug 模式）
         self._block_no = 0
+        self._lease = lease
         self.cfg = (context_cfg or ContextConfig()).merged(profile.context)
         self.memory = memory or RollingMemory(
             glossary_max_entries=self.cfg.memory.glossary_max_entries,
@@ -147,6 +152,11 @@ class Translator:
         """Provider 声明术语表硬约束能力 → 走 instTrans 契约（纯文本响应）。"""
         caps = getattr(getattr(provider, "cfg", None), "capabilities", None) or []
         return CAP_GLOSSARY_CONSTRAINT in caps
+
+    @property
+    def bound(self) -> bool:
+        """翻译槽当前是否已绑定 Provider（未绑定 ≠ 翻译失败，不应标记错误状态）。"""
+        return self._get_provider() is not None
 
     @property
     def online(self) -> bool:
@@ -237,10 +247,24 @@ class Translator:
     def _translate_block_inner(
         self, texts: list[str], with_context: bool, trace: list[Attempt] | None = None
     ) -> list[TranslationResult] | None:
-        """返回 None = 整块失败（调用方决定重试/兜底）。"""
+        """返回 None = 整块失败（调用方决定重试/兜底）。
+
+        配置了 lease 时，实际 chat() 在租约内完成：换绑发布后本请求仍跑完，
+        旧代实例等租约归零才回收。
+        """
+        if self._lease is not None:
+            with self._lease() as provider:
+                if provider is None:
+                    return None  # 槽位在取引用间隙被解绑：走调用方降级链
+                return self._translate_with_provider(provider, texts, with_context, trace)
         provider = self._get_provider()
         if provider is None:
-            return None  # 槽位在取引用间隙被解绑：走调用方降级链
+            return None
+        return self._translate_with_provider(provider, texts, with_context, trace)
+
+    def _translate_with_provider(
+        self, provider, texts: list[str], with_context: bool, trace: list[Attempt] | None = None
+    ) -> list[TranslationResult] | None:
         insttrans = self._is_insttrans(provider)
         if insttrans:
             path, flags = self._insttrans_template()

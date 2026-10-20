@@ -1,8 +1,18 @@
 from pathlib import Path
 
 import pytest
+import yaml
 
-from src.config import API_KEY_ENV, LLMConfig, find_project_root, load_config
+from src.config import (
+    API_KEY_ENV,
+    LLMConfig,
+    SlotsConfig,
+    UIConfig,
+    find_project_root,
+    load_config,
+    save_provider_config,
+    save_ui_config,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -92,3 +102,129 @@ def test_find_root_with_example_only(tmp_path):
     (tmp_path / "config").mkdir()
     (tmp_path / "config" / "config.example.yaml").write_text("{}", encoding="utf-8")
     assert find_project_root(tmp_path) == tmp_path.resolve()
+
+
+def _write_example(tmp_path: Path, extra: str = "") -> Path:
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "config" / "config.example.yaml").write_text(
+        "llm:\n  base_url: ''\n  api_key: ''\n  model: ''\n" + extra,
+        encoding="utf-8",
+    )
+    return tmp_path
+
+
+def test_ui_appearance_defaults(tmp_path):
+    cfg = load_config(_write_example(tmp_path))
+    ui = cfg.ui
+    assert ui.overlay is True
+    assert ui.theme == "dark"
+    assert ui.background_opacity is None
+    assert ui.effective_background_opacity == 0.85  # 迁移自旧 opacity
+    assert ui.show_bar_a and ui.show_bar_b and ui.show_bar_c
+    assert ui.auto_scroll is True and ui.compact_mode is False
+    assert ui.ui_language == "zh_CN"
+    assert ui.view_capacity == 200
+    # 逐项颜色/字体配置已移除，由主题预定义
+    assert not hasattr(ui, "source_color")
+    assert not hasattr(ui, "background_color")
+
+
+def test_ui_opacity_migration_and_explicit_background_opacity(tmp_path):
+    cfg = load_config(_write_example(tmp_path, "ui:\n  opacity: 0.5\n"))
+    assert cfg.ui.effective_background_opacity == 0.5
+
+    cfg = load_config(
+        _write_example(tmp_path / "b", "ui:\n  opacity: 0.5\n  background_opacity: 0.3\n")
+    )
+    assert cfg.ui.effective_background_opacity == 0.3  # 新字段优先
+
+
+def test_ui_legacy_color_fields_ignored_on_load(tmp_path):
+    """旧配置的颜色/字体字段被忽略（主题取代），加载不报错。"""
+    cfg = load_config(
+        _write_example(
+            tmp_path,
+            "ui:\n  background_color: '#112233'\n  source_color: '#FFFFFF'\n  theme: light\n",
+        )
+    )
+    assert cfg.ui.theme == "light"
+
+
+def test_ui_merged_profile_appearance_override():
+    base = UIConfig()
+    assert base.merged(None) is base
+    assert base.merged({}) is base
+    merged = base.merged(
+        {"theme": "light", "background_opacity": 0.6, "unknown_key": 1, "auto_scroll": False}
+    )
+    assert merged.theme == "light"
+    assert merged.effective_background_opacity == 0.6
+    assert merged.auto_scroll is False
+    assert base.theme == "dark"  # 原对象不被修改
+
+
+def test_save_ui_config_atomic_and_preserves_other_sections(tmp_path):
+    root = _write_example(tmp_path)
+    cfg = load_config(root)
+    path = cfg.config_file
+    # 预置一个无关字段和 ui 节的旧字段，验证保存后保留无关节、清掉旧颜色字段
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    raw["custom_section"] = {"keep": True}
+    raw["ui"] = {"opacity": 0.7, "background_color": "#112233"}  # 旧字段应被清除
+    path.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+
+    ui = UIConfig(theme="light", background_opacity=0.6, view_capacity=100)
+    save_ui_config(cfg, ui)
+
+    saved = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert saved["custom_section"] == {"keep": True}
+    assert saved["ui"]["opacity"] == 0.7  # 旧字段保留作迁移输入
+    assert saved["ui"]["theme"] == "light"
+    assert saved["ui"]["background_opacity"] == 0.6
+    assert saved["ui"]["view_capacity"] == 100
+    assert "background_color" not in saved["ui"]  # 旧颜色字段不再写回
+    assert not list(path.parent.glob("*.tmp"))  # 原子写不留临时文件
+
+
+def test_save_provider_config_preserves_fields_and_skips_env_key(tmp_path, monkeypatch):
+    root = _write_example(tmp_path)
+    cfg = load_config(root)
+    path = cfg.config_file
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "providers": [
+                    {
+                        "id": "p1",
+                        "name": "旧名",
+                        "type": "openai_compatible",
+                        "base_url": "https://old.example/v1",
+                        "api_key": "file-key",
+                        "model": "old-model",
+                        "capabilities": ["translation"],
+                        "timeout_sec": 45,
+                        "max_retries": 5,
+                        "custom_future_field": {"nested": [1, 2]},
+                    }
+                ],
+                "slots": {"translation": "p1", "grammar": ""},
+            },
+            allow_unicode=True,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(API_KEY_ENV, "sk-env-injected")
+    cfg = load_config(root)
+    provider = next(p for p in cfg.providers if p.id == "p1")
+    provider.name = "新名"
+    assert provider.api_key == "file-key"  # env 只填充空 key，不覆盖文件值
+    provider.api_key = "sk-env-injected"  # 模拟运行态中密钥来自环境变量注入
+    save_provider_config(cfg, provider, SlotsConfig(translation="p1", grammar=""))
+
+    saved = yaml.safe_load(path.read_text(encoding="utf-8"))
+    entry = saved["providers"][0]
+    assert entry["name"] == "新名"
+    assert entry["api_key"] == ""  # 环境变量注入的密钥不落盘
+    assert entry["timeout_sec"] == 45 and entry["max_retries"] == 5  # 字段不丢失
+    assert entry["custom_future_field"] == {"nested": [1, 2]}  # 未知字段保留
+    assert saved["slots"] == {"translation": "p1", "grammar": ""}

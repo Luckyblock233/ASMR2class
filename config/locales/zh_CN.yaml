@@ -1,0 +1,115 @@
+settings.title: 设置
+settings.tab.providers: 模型与槽位
+settings.tab.appearance: 外观
+settings.apply: 应用
+settings.slots.group: 槽位绑定
+settings.slots.unbound: （未绑定）
+settings.slots.profile_override: （档案覆盖：当前语言档案已固定此槽位，请在档案 YAML 中修改）
+settings.providers.field.name: 名称
+settings.providers.field.type: 类型
+settings.providers.field.capabilities: 能力
+settings.providers.field.timeout: 超时（秒）
+settings.providers.field.retries: 重试次数
+settings.providers.cap.translation: 翻译
+settings.providers.cap.grammar: 语法
+settings.providers.cap.glossary: 术语硬约束
+settings.providers.local_notice: 本地托管字段（gguf_path/server_args 等）请编辑 config.yaml；此处修改会保留原
+  local 配置。
+settings.providers.new: 新增
+settings.providers.save: 保存（健康检查后生效）
+settings.providers.delete: 删除
+settings.providers.delete_confirm: 确定删除该 Provider？
+settings.providers.health: 健康检查
+settings.health.checking: 正在健康检查…
+settings.appearance.background_opacity: 背景不透明度
+settings.appearance.line_spacing: 行距倍数
+settings.appearance.window_size: 窗口尺寸
+settings.appearance.bars: 栏目显隐
+settings.appearance.bar_a: A 控制栏
+settings.appearance.bar_b: B 模型栏
+settings.appearance.bar_c: C 状态栏
+settings.appearance.auto_scroll: 新句自动滚动到底
+settings.appearance.compact_mode: 紧凑模式
+settings.appearance.ui_language: 界面语言（重启后生效）
+settings.appearance.view_capacity: 实时视图句块容量
+settings.appearance.restore_defaults: 恢复默认外观
+settings.appearance.restore_confirm: 确定恢复默认外观？当前外观设置将被覆盖。
+settings.msg.applied: 已应用
+settings.msg.profile_locked: 当前语言档案已覆盖该槽位绑定，全局修改未应用
+settings.msg.provider_missing: Provider 不存在
+settings.msg.capability_mismatch: 能力不匹配
+settings.msg.health_failed: 健康检查失败，保留原绑定
+settings.msg.health_ok: 健康检查通过
+settings.msg.save_failed: 配置保存失败，保留原运行状态
+settings.msg.provider_saved: Provider 已保存
+settings.msg.provider_deleted: Provider 已删除
+settings.msg.provider_in_use: 该 Provider 仍被槽位绑定，无法删除
+settings.msg.provider_id_required: Provider id 不能为空
+settings.msg.provider_incomplete: Provider 配置不完整（需要 id、base_url、model）
+settings.msg.unknown_slot: 未知槽位
+settings.msg.internal_error: 内部错误
+overlay.menu.click_through: 点击穿透
+overlay.menu.always_on_top: 窗口置顶
+overlay.menu.auto_scroll: 自动滚动
+overlay.menu.compact: 紧凑模式
+overlay.menu.subtitles: 显示字幕区
+overlay.pause: 暂停
+overlay.resume: 继续
+overlay.clear: 清空显示
+overlay.settings: 设置
+overlay.clear_confirm: 确定清空当前显示？已保存的会话数据不受影响。
+overlay.exit_confirm: 确定退出？当前实时会话将结束并保存。
+overlay.tray.restore: 恢复显示
+overlay.tray.quit: 退出
+overlay.through_on: 点击穿透已开启，右键托盘图标恢复
+overlay.through_off: 点击穿透已关闭
+overlay.vram_warn: 空闲显存不足，建议改用 CPU 推理或云端 Provider
+overlay.services: 服务
+overlay.status.legend: ●运行中 ●降级运行 ●错误 ○停止；点击查看详情
+overlay.status.running: 运行中
+overlay.status.degraded: 降级运行
+overlay.status.error: 错误
+overlay.status.stopped: 停止
+overlay.status.last_error: 最近错误
+overlay.status.click_detail: 点击查看详情
+overlay.status.detail_title: 服务状态详情
+overlay.status.state: 状态
+overlay.status.active_calls: 在途请求
+overlay.profile: 档案
+overlay.profile_switch_failed: 语言档案切换失败
+replay.title: 会话回放
+replay.play: 播放/暂停
+replay.open_media: 打开媒体
+replay.media_missing: 媒体文件不存在
+replay.media_error: 媒体播放出错
+settings.tab.memory: 记忆
+settings.tab.prompt: Prompt
+settings.memory.term: 术语
+settings.memory.translation: 译文
+settings.memory.type: 类型
+settings.memory.add: 添加术语
+settings.memory.remove: 删除选中
+settings.memory.reload: 重新加载
+settings.memory.clear: 清空
+settings.memory.clear_confirm: 确定清空术语表与风格？应用后生效。
+settings.memory.style: 风格摘要
+settings.memory.style_locked: （档案预设锁定，只读）
+settings.memory.live_hint: 编辑当前实时会话的滚动记忆：应用后下一次翻译立即生效，会话结束随会话文件落盘。
+settings.memory.no_live: 当前没有实时会话记忆（未启用翻译或未在实时模式）。可从文件载入 memory.json 编辑。
+settings.memory.load_file: 从文件载入…
+settings.memory.save_file: 另存到文件…
+settings.memory.editing_file: 正在编辑文件
+settings.memory.empty_field: 术语和译文都不能为空
+settings.memory.duplicate: 术语重复
+settings.prompt.dir: Prompt 模板目录
+settings.prompt.open_dir: 打开目录
+settings.prompt.missing: （未找到模板，将回落 _default）
+settings.prompt.restore: 恢复默认
+settings.prompt.restore_confirm: 确定恢复为默认模板？当前文件将备份为 .bak 后覆盖。
+settings.msg.no_custom_template: 当前档案未指定自定义模板（正在使用 _default）
+settings.msg.default_template_missing: 默认模板缺失
+settings.msg.template_restored: 已恢复默认模板（原文件已备份 .bak）
+settings.msg.memory_saved: 记忆已保存
+settings.appearance.theme: 主题
+settings.appearance.theme.dark: 夜间模式
+settings.appearance.theme.light: 白天模式

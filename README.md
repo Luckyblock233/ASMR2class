@@ -41,7 +41,10 @@ uv run python -m src.main --source loopback --loopback-device "扬声器"  # 指
 uv run python -m src.main --source file --input a.wav --profile en   # 文件模拟
 uv run python -m src.main --no-translate         # 仅识别不翻译（离线调试）
 uv run python -m src.main --grammar              # 自动后台语法分析（默认不开启，避免额外 API 费用）
-uv run python -m src.main --replay-session output/<日期>-<会话名>  # 重载句块与语法卡（不含媒体播放）
+uv run python -m src.main --replay-session output/<日期>-<会话名>            # 重载句块与语法卡
+uv run python -m src.main --replay-session output/<日期>-<会话名> --media a.mp4  # 会话 + 音视频同步回放
+uv run python -m src.main --srt a.srt --media a.mp4                        # 外部 SRT（保留多行）+ 媒体回放
+uv run python -m src.main --batch a.mp4 b.mkv                              # 真正的离线批处理（PyAV 解码，非实时模拟）
 uv run python -m src.main --debug                # 完整输出每次 LLM 请求/响应（prompt 全文、原始响应、token 用量、降级链）
 uv run python -m src.main --auto-lang            # ASR 自动检测语种
 uv run python -m src.main --no-overlay           # 禁用悬浮窗（纯控制台）
@@ -122,8 +125,8 @@ slots:
 ```
 
 - **能力标签过滤**：`translation` 可绑翻译槽、`grammar` 可绑语法槽、`glossary_constraint` 启用术语表硬约束（instTrans 映射：术语表→【硬性要求】、风格→【注意】，模板 `config/prompts/_default/translate_insttrans.txt` 可改）。无 `grammar` 能力的翻译专用模型无法绑到语法槽。
-- **档案覆盖**：语言档案内 `slots.translation` / `slots.grammar` 优先于全局，切换档案即切换模型。
-- **热切换就绪**：槽位对 Provider 是运行时引用，改绑 config 后重启即生效；图形设置页（保存即生效、不重启）规划在 M3。
+- **档案覆盖**：语言档案内 `slots.translation` / `slots.grammar` 优先于全局，切换档案即切换模型；档案覆盖槽位时设置页/B 栏会显示锁定标识，不会假报全局换绑已生效。
+- **安全热换绑**：设置页或悬浮窗 B 栏改绑即生效（不重启）。请求经租约（`slots.acquire`）使用 Provider：换绑后旧实例等在途请求结束才回收；同 id 编辑、A→B→A 都产生新实例代际；健康检查或配置保存失败时保留旧运行态。本地 llama-server 的启动/关闭等待都在 worker 线程，不卡 GUI。
 - **向后兼容**：不填 `providers:` 时，旧 `llm:` 节自动合成为 `default` Provider 并绑到两个槽位，现有配置零改动。
 - 本地 GGUF 下载：`--download-model <provider_id>`（HF 直连失败自动切镜像，再失败自动试 ModelScope；需先在 `local.download` 配好仓库信息）。llama-server 二进制需自备（装到 PATH 或 `local.server_bin` 填绝对路径）。
 
@@ -131,8 +134,17 @@ slots:
 
 - 语法槽绑定具有 `grammar` 能力的 Provider 后，`--grammar` 会对新句自动排队分析；不加该参数时不会自动产生语法 API 请求，但可在句块右键选择“为此句生成语法分析”。
 - 分析在后台执行，按稳定句段 ID 回写，乱序完成不会改变字幕顺序。未绑定、超时或 JSON 契约失败只影响对应句子的语法状态，不阻断识别和翻译。
-- 有分析数据的句块可点击弹出语法卡。卡片区块、字段、标题和徽章颜色由 `config/languages/<lang>.yaml` 的 `grammar_card.sections` 声明；日语/英语字段只存在 YAML 和 prompt 中。
-- 会话结束时会先停止接收新任务并限期排空，再保存 `analysis.<源语言>.json`。`--replay-session <会话目录>` 可在不加载 ASR、不连接 Provider 的情况下恢复句块和语法卡；完整音视频回放与设置页属于后续 M3 阶段。
+- 有分析数据的句块可点击弹出语法卡（实时模式）。卡片区块、字段、标题和徽章颜色由 `config/languages/<lang>.yaml` 的 `grammar_card.sections` 声明；日语/英语字段只存在 YAML 和 prompt 中。
+- 会话结束时会先停止接收新任务并限期排空，再保存 `analysis.<源语言>.json`。
+
+## M3 后续：完整悬浮窗 / 设置页 / 回放 / 离线批处理
+
+- **A–D 悬浮窗**：A 栏（菜单：穿透/置顶/自动滚动/紧凑/字幕显隐 + 运行暂停/清空显示/设置/关闭）、B 栏（档案切换 + 槽位下拉，能力过滤，主行模型名、细节 tooltip）、C 栏（RMS/VAD、CPU/RAM/GPU/VRAM、句数与 ASR/翻译耗时，阈值着色可配置 `ui.latency_*` / `ram_warn_percent`；服务状态点 ●运行中 ●降级 ●错误 ○停止，点击查看最近错误）、D 区（翻译占位/失败状态行、上翻暂停跟随 + 回到底部、容量上限 `ui.view_capacity`、条目分隔线）。
+- **外观**：白天/夜间两套预定义主题（`ui.theme`）+ 背景不透明度（RGBA 背景，文字不随窗口变淡）、行距、窗口尺寸、栏目显隐、紧凑模式、中/英界面文案（`config/locales/*.yaml`）。设置页修改即时预览、应用后原子落盘；语言档案 `appearance:` 节可覆盖。
+- **档案运行中切换**：B 栏切换档案即「会话滚动」——暂停接收新句 → 冲刷/排空 → 旧会话落盘 → 新档案重建翻译/语法/记忆/文档，绝不混写两种源语言的 analysis 文件。
+- **回放**：`--replay-session <dir> --media <媒体>` 或界面「打开媒体」；媒体时钟驱动当前句高亮，单击句块 seek（双击或右键弹语法卡，两种手势分离）；`--srt` 外部字幕完整块读取保留多行。
+- **离线批处理**：`--batch 文件…` 走 PyAV 流式解码（拉取式背压，不丢音频），离线块上限 `context.block.max_sentences_offline`（默认 20）实际生效；顺序翻译保持滚动记忆顺序，语法排空后才保存；逐文件失败隔离，Ctrl+C 保存已完成部分后退出。
+- **记忆编辑**：设置页「记忆」页签查看/增删改术语与风格（`style_preset` 锁定时只读）；编辑实时会话同一实例，下一次翻译立即生效；`memory.json` 严格校验（空字段/重复术语/档案不匹配报错）、原子保存；「Prompt」页签可打开模板目录、恢复默认模板（自动 .bak 备份，mtime 热重载即时生效）。
 
 ## M1 验收清单（Windows 真机）
 
@@ -164,5 +176,5 @@ ASR2CLASS_E2E=1 .venv/bin/python -m pytest tests/test_pipeline_e2e.py   # 真实
 - [x] **M1** 核心链路：双来源采集 → 流式 ASR → LLM 翻译 → 控制台输出
 - [x] **M2** 字幕落盘（txt/原文 srt/双语 srt/analysis.json/memory.json）+ PyQt6 置顶半透明悬浮窗（拖拽/透明度/点击穿透）
 - [x] **M3 第一轮** 异步语法分析 + 稳定 ID 原位更新 + 动态语法卡 + 分析落盘/重载预览
-- [ ] **M3 后续** 完整悬浮窗栏目、设置页、安全热换绑与音视频同步回放
+- [x] **M3 后续** 完整 A–D 悬浮窗、设置页、安全热换绑、档案会话滚动切换、音视频同步回放、真正离线批处理、记忆编辑（Windows 真机验收逐项进行中）
 - [ ] M4 生词本导出、缓存优化、PyInstaller 打包

@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import logging
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, field
+from typing import ContextManager, Iterator
 
 from ..config import SlotsConfig
 from .providers import (
@@ -77,13 +79,48 @@ class ModelSlots:
     def resolution(self) -> SlotResolution:
         return self._resolution
 
+    @property
+    def registry(self) -> ProviderRegistry:
+        return self._registry
+
     def provider(self, slot: str) -> ProviderBase | None:
-        """取槽位当前绑定的 Provider（未绑定/构造失败返回 None）。"""
+        """取槽位当前绑定的 Provider（未绑定/构造失败返回 None）。
+
+        只读路径（状态显示/能力判断）；实际 chat() 请求必须用 acquire() 租约。
+        """
         with self._lock:
             pid = self._resolution.bindings.get(slot)
         if not pid:
             return None
         return self._registry.get(pid)
+
+    @contextmanager
+    def acquire(self, slot: str) -> Iterator[ProviderBase | None]:
+        """租约消费接口：
+
+        ```python
+        with slots.acquire(SLOT_TRANSLATION) as provider:
+            if provider is not None:
+                response = provider.chat(...)
+        ```
+
+        租约持有期间，即使发生换绑，旧实例也不会被回收；释放必须在 finally。
+        """
+        with self._lock:
+            pid = self._resolution.bindings.get(slot)
+        if not pid:
+            yield None
+            return
+        with self._registry.acquire(pid) as provider:
+            yield provider
+
+    def translation_lease(self) -> ContextManager[ProviderBase | None]:
+        """翻译槽租约（作为零参 callable 传给 Translator）。"""
+        return self.acquire(SLOT_TRANSLATION)
+
+    def grammar_lease(self) -> ContextManager[ProviderBase | None]:
+        """语法槽租约（作为零参 callable 传给 GrammarAnalyzer）。"""
+        return self.acquire(SLOT_GRAMMAR)
 
     def translation_provider(self) -> ProviderBase | None:
         return self.provider(SLOT_TRANSLATION)

@@ -57,12 +57,17 @@ class LLMClient:
             max_retries=0,  # 重试由本类统一管理（指数退避）
         )
         self._online = True
+        self._last_error = ""  # 最近一次请求失败的原因（成功时清空；状态点 tooltip 用）
         self._json_supported = True  # 服务商是否支持 response_format=json_object（400 时自动退化）
         self._lock = threading.Lock()
 
     @property
     def online(self) -> bool:
         return self._online
+
+    @property
+    def last_error(self) -> str:
+        return self._last_error
 
     def _set_online(self, value: bool) -> None:
         with self._lock:
@@ -104,6 +109,7 @@ class LLMClient:
                     **kwargs,
                 )
                 self._set_online(True)
+                self._last_error = ""
                 usage = getattr(resp, "usage", None)
                 return ChatResult(
                     content=(resp.choices[0].message.content or "").strip(),
@@ -115,6 +121,7 @@ class LLMClient:
                 )
             except (APIConnectionError, APITimeoutError) as e:
                 last_exc = e
+                self._last_error = f"{type(e).__name__}: {e}"
                 self._set_online(False)
             except APIStatusError as e:
                 # 服务商不支持 response_format：退化后原地重试，不计入退避次数
@@ -124,6 +131,7 @@ class LLMClient:
                     use_json = False
                     continue
                 last_exc = e
+                self._last_error = f"HTTP {e.status_code}: {e.message}"
                 # 4xx（鉴权/参数错误）不重试，直接抛出
                 if 400 <= e.status_code < 500:
                     raise

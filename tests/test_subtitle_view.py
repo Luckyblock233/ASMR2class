@@ -14,6 +14,9 @@ from src.subtitle.document import (
     ANALYSIS_NONE,
     ANALYSIS_PENDING,
     ANALYSIS_READY,
+    TRANSLATION_FAILED,
+    TRANSLATION_PENDING,
+    TRANSLATION_READY,
     Segment,
 )
 from src.ui.subtitle_view import SentenceBlock, SubtitleView
@@ -217,4 +220,171 @@ def test_upsert_scrolls_to_bottom(qapp):
     scrollbar = view.scroll_area.verticalScrollBar()
     assert scrollbar.maximum() > 0
     assert scrollbar.value() == scrollbar.maximum()
+    view.close()
+
+
+def test_translation_placeholder_then_in_place_update(qapp):
+    """翻译占位：ASR 句先显示「翻译中…」，完成后按 ID 原位更新；失败显示错误行。"""
+    view = SubtitleView()
+    view.upsert_segment(Segment(
+        id=1, start=0, end=1, source="原文", translation=None,
+        translation_status=TRANSLATION_PENDING,
+    ))
+    block = view._blocks[1]
+    assert block.translation_label.text() == "翻译中…"
+
+    view.upsert_segment(Segment(
+        id=1, start=0, end=1, source="原文", translation="译文",
+        translation_status=TRANSLATION_READY, translate_ms=800.0,
+    ))
+    assert view._blocks[1] is block  # 原位更新，不重建控件
+    assert block.translation_label.text().startswith("译文")  # 行尾可能跟 TL 延迟小字
+
+    view.upsert_segment(Segment(
+        id=2, start=1, end=2, source="二", translation=None,
+        translation_status=TRANSLATION_FAILED, translation_error="超时",
+    ))
+    failed = view._blocks[2]
+    assert failed.translation_label.text() == "⚠ 翻译失败"
+    assert "翻译失败" in failed.status_label.text()
+    assert failed.status_label.toolTip() == "超时"
+    view.close()
+
+
+def _shown_view(qapp, **kwargs):
+    view = SubtitleView(**kwargs)
+    view.resize(360, 120)
+    view.show()
+    return view
+
+
+def test_user_scroll_up_pauses_follow_and_back_to_bottom_restores(qapp):
+    """用户上翻不被新句抢回；点回到底部恢复跟随（交接文档 D 区）。"""
+    view = _shown_view(qapp)
+    for i in range(1, 21):
+        view.upsert_segment(_segment(i, source=f"句{i}"))
+    qapp.processEvents()
+    scrollbar = view.scroll_area.verticalScrollBar()
+    assert scrollbar.value() == scrollbar.maximum()  # 默认跟随
+
+    scrollbar.setValue(0)  # 模拟用户上翻
+    qapp.processEvents()
+    assert not view.following
+    assert view.back_to_bottom.isVisibleTo(view)
+
+    view.upsert_segment(_segment(21, source="新句"))
+    qapp.processEvents()
+    assert scrollbar.value() < scrollbar.maximum()  # 不抢滚动条
+
+    view.back_to_bottom.click()
+    qapp.processEvents()
+    assert view.following
+    assert scrollbar.value() == scrollbar.maximum()
+    view.close()
+
+
+def test_in_place_update_does_not_steal_scroll(qapp):
+    view = _shown_view(qapp)
+    for i in range(1, 21):
+        view.upsert_segment(_segment(i, source=f"句{i}"))
+    qapp.processEvents()
+    scrollbar = view.scroll_area.verticalScrollBar()
+    scrollbar.setValue(0)
+    qapp.processEvents()
+    assert not view.following
+
+    # 纯分析/译文原位更新：不恢复跟随、不抢滚动
+    view.upsert_segment(_segment(20, source="句20", status=ANALYSIS_READY, structure={"x": 1}))
+    qapp.processEvents()
+    assert not view.following
+    assert scrollbar.value() < scrollbar.maximum()
+    view.close()
+
+
+def test_view_capacity_evicts_oldest_blocks_only(qapp):
+    """容量上限淘汰最旧控件；已淘汰 ID 的迟到更新直接忽略（不乱序重建）。"""
+    view = _shown_view(qapp, capacity=5)
+    for i in range(1, 9):
+        view.upsert_segment(_segment(i, source=f"句{i}"))
+    qapp.processEvents()
+    assert view._order == [4, 5, 6, 7, 8]
+    assert set(view._blocks) == {4, 5, 6, 7, 8}
+    view.upsert_segment(_segment(1, source="迟到分析", status=ANALYSIS_READY, structure={"x": 1}))
+    assert 1 not in view._blocks  # 淘汰水位线以下的迟到更新被忽略
+    assert view._order == [4, 5, 6, 7, 8]
+    view.close()
+
+
+def test_replay_mode_separates_seek_and_grammar_gestures(qapp):
+    """回放：单击只 seek；双击才弹语法；一次手势不产生两个结果。"""
+    view = _shown_view(qapp, replay_mode=True, read_only=True)
+    ready = _segment(1, status=ANALYSIS_READY, structure={"custom": "分析"})
+    plain = _segment(2, source="无分析句")
+    view.upsert_segment(ready)
+    view.upsert_segment(plain)
+    seeks, grammars, activated = [], [], []
+    view.seek_requested.connect(seeks.append)
+    view.grammar_requested.connect(grammars.append)
+    view.sentence_activated.connect(activated.append)
+    qapp.processEvents()
+
+    QTest.mouseClick(view._blocks[1], Qt.MouseButton.LeftButton)
+    assert seeks == [1] and grammars == [] and activated == []
+    QTest.mouseClick(view._blocks[2], Qt.MouseButton.LeftButton)
+    assert seeks == [1, 2]  # 无分析句也可 seek
+
+    QTest.mouseDClick(view._blocks[1], Qt.MouseButton.LeftButton)
+    assert grammars == [1] and activated == []
+    QTest.mouseDClick(view._blocks[2], Qt.MouseButton.LeftButton)
+    assert grammars == [1]  # 无分析句双击不产生语法请求
+    view.close()
+
+
+def test_replay_bulk_load_does_not_jump_to_bottom(qapp):
+    view = _shown_view(qapp, replay_mode=True, read_only=True)
+    for i in range(1, 30):
+        view.upsert_segment(_segment(i, source=f"句{i}"))
+    qapp.processEvents()
+    scrollbar = view.scroll_area.verticalScrollBar()
+    assert scrollbar.value() == 0  # 批量加载停在顶部
+    assert not view.following
+    view.close()
+
+
+def test_current_segment_highlight_and_follow(qapp):
+    view = _shown_view(qapp, replay_mode=True, read_only=True)
+    for i in range(1, 30):
+        view.upsert_segment(_segment(i, source=f"句{i}"))
+    qapp.processEvents()
+    view.set_current_segment(5)
+    assert view._blocks[5].is_current
+    assert not view._blocks[4].is_current
+    view.set_current_segment(6)
+    assert view._blocks[6].is_current and not view._blocks[5].is_current
+    view.set_current_segment(None)  # 句间空白清除高亮
+    assert not view._blocks[6].is_current
+    view.close()
+
+
+def test_system_message_line(qapp):
+    view = _shown_view(qapp)
+    view.upsert_segment(_segment(1))
+    view.add_system_message("已切换语言档案")
+    qapp.processEvents()
+    texts = [
+        view._layout.itemAt(i).widget().text()
+        for i in range(view._layout.count())
+        if view._layout.itemAt(i).widget() is not None
+        and view._layout.itemAt(i).widget().objectName() == "systemMessage"
+    ]
+    assert texts == ["— 已切换语言档案 —"]
+    view.clear()
+    qapp.processEvents()
+    assert not view._blocks
+    remaining = [
+        view._layout.itemAt(i).widget()
+        for i in range(view._layout.count())
+        if view._layout.itemAt(i).widget() is not None
+    ]
+    assert remaining == []  # 系统行随清空移除
     view.close()

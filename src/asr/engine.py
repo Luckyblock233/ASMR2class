@@ -1,15 +1,22 @@
-"""faster-whisper 引擎封装（§4.2 GPU 使用策略）。
+"""faster-whisper 引擎封装（§4.2 GPU 使用策略 + 幻觉三层压制）。
 
 - device=auto：检测 CUDA + 剩余显存，满足预算用 GPU（int8_float16），否则 CPU（int8）
 - device=cpu：纯 CPU 模式
 - GPU 初始化失败自动回落 CPU 并提示（§7 稳定性）
 - 禁止事项由配置约束：本模块不加载任何 LLM，模型档位仅来自 config
+
+幻觉压制（模型外围，三道防线按序串联）：
+1. VAD 前置过滤：断句/裁剪在 SegmentProcessor 完成，本模块输入只有语音段
+2. 解码参数约束：显式语种、condition_on_previous_text=False、置信度阈值
+   与温度回退链原样传入 transcribe()（低质量窗口由引擎内部门控+重试）
+3. 后处理兜底：段级元数据再过滤 + 幻觉短语黑名单 + 连续重复段折叠
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -169,6 +176,33 @@ def _is_network_error(exc: BaseException) -> bool:
 MIRROR_ENDPOINT = "https://hf-mirror.com"
 
 
+_LOOP_RE = re.compile(r"(.{2,}?)(?: ?\1){2,}", re.DOTALL)
+
+
+def fold_repetitions(text: str) -> str:
+    """折叠连续重复段（自回归复读循环的产物）。
+
+    任意位置（句首/句中/句尾）的 unit × k（k≥3）折叠为一份；单元最短 2 字符，
+    减少拟声词/正常重复（"わくわく"）的误折叠。可处理空格分隔与无空格形态。
+    """
+    norm = re.sub(r"\s+", " ", text).strip()
+    if len(norm) < 8:
+        return norm
+    while True:
+        m = _LOOP_RE.search(norm)
+        if not m:
+            return norm
+        unit = m.group(1).strip()
+        log.info("折叠复读段：%r ×%d", unit, norm[m.start():m.end()].count(m.group(1)))
+        # 单元与前文无空格（日语等黏着语）：首次出现属于原句结尾，只折叠其后的复读
+        if m.start() > 0 and norm[m.start() - 1] != " ":
+            norm = (norm[: m.start()] + m.group(1) + norm[m.end():]).strip()
+        else:
+            norm = re.sub(
+                r"\s+", " ", (norm[: m.start()] + " " + unit + " " + norm[m.end():])
+            ).strip()
+
+
 class ModelLoadError(RuntimeError):
     """模型既无法下载也无法加载时的最终错误（附带用户可操作的指引）。"""
 
@@ -294,15 +328,20 @@ class ASREngine:
     ) -> tuple[str, float, float]:
         """转写一段已断句的音频，返回 (文本, 起始秒, 结束秒)（相对该段音频）。
 
-        幻觉门控：静音/BGM 段会幻觉出视频结尾高频字幕句（如「最後まで視聴して…」），
-        满足丢弃条件的 segment 不计入结果（调用方对空文本自然跳过）。
+        参数拼写注意（faster-whisper vs openai-whisper）：log_prob_threshold
+        拼错成 logprob_threshold 会被静默忽略——tests/test_engine.py 有签名级验证。
+        置信度阈值传给引擎原生门控（触发温度回退重试）；本层另做事后过滤兜底。
         """
         segments, _info = self._model.transcribe(
             audio,
-            language=language,
+            language=language,  # 显式语种：静音段不走自动检测
             beam_size=self.cfg.beam_size,
-            vad_filter=False,  # 断句已在 streamer 完成
+            vad_filter=False,  # 断句已在 streamer 完成（VAD 前置过滤）
             condition_on_previous_text=self.cfg.condition_on_previous,
+            temperature=list(self.cfg.temperature_fallback),  # 温度回退链
+            no_speech_threshold=self.cfg.no_speech_threshold,
+            log_prob_threshold=self.cfg.log_prob_threshold,
+            compression_ratio_threshold=self.cfg.compression_ratio_threshold,
         )
         texts: list[str] = []
         start: float | None = None
@@ -314,7 +353,20 @@ class ASREngine:
             if start is None:
                 start = seg.start
             end = seg.end
-        return "".join(texts).strip(), (start or 0.0), end
+        text = fold_repetitions("".join(texts))
+        if text and self._phrase_hit(text):
+            # 复读循环的产物折叠后仍命中黑名单：整段丢弃
+            log.info("丢弃折叠后仍命中黑名单的段落：%r", text)
+            return "", (start or 0.0), end
+        return text, (start or 0.0), end
+
+    def _phrase_hit(self, text: str) -> bool:
+        """幻觉短语黑名单：归一化（去空白、全小写）后包含匹配。"""
+        normalized = "".join(text.split()).lower()
+        return any(
+            "".join(p.split()).lower() in normalized
+            for p in self.cfg.hallucination_phrases
+        )
 
     def _is_hallucination(self, seg) -> bool:
         """Whisper 幻觉段判定：质量门控（与原版跳过规则一致）+ 幻觉短语黑名单。"""
@@ -326,12 +378,7 @@ class ASREngine:
              and avg_logprob < self.cfg.log_prob_threshold)
             or compression > self.cfg.compression_ratio_threshold
         )
-        # 形态固定的视频结尾客套话：归一化（去空白、全小写）后包含匹配
-        normalized = "".join(seg.text.split()).lower()
-        phrase_hit = any(
-            "".join(p.split()).lower() in normalized
-            for p in self.cfg.hallucination_phrases
-        )
+        phrase_hit = self._phrase_hit(seg.text)
         if quality_drop or phrase_hit:
             log.info(
                 "丢弃疑似幻觉段：%r（no_speech=%.2f, logprob=%.2f, compression=%.1f, 短语命中=%s）",

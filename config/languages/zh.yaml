@@ -1,4 +1,7 @@
-# config/languages/zh.yaml —— 中文档案（源语言为中文时使用）
+# config/languages/zh.yaml —— 中文语言包
+# 语言包提供：ASR 语种提示、默认目标语言（language_pair.target）、语法 prompt/语法卡、
+# 档案级槽位覆盖。运行时可在启动器/B 栏自由选择 源语言（含自动识别）× 目标语言，
+# language_pair.target 只是默认目标，可在 B 栏随时改。
 language: zh
 display_name: 中文
 language_pair:
@@ -7,7 +10,39 @@ language_pair:
 asr:
   language_hint: zh
 llm: {}
+level_hint: HSK 1-4，重点讲解当前句子中的句型、虚词（把/被/了/着/过/得）和语序
 prompts:
-  translate: _default/translate.txt
+  translate: zh/translate.txt
+  grammar: zh/grammar.txt
 subtitle:
   display_order: source_first
+grammar_card:
+  sections:
+    - key: structure
+      title: 句子结构
+      renderer: tree
+    - key: grammar_points
+      title: 语法点
+      renderer: cards
+      title_field: name
+      body_fields:
+        - {key: explanation, label: 讲解}
+        - {key: example, label: 例句}
+      badge:
+        field: hsk
+        colors:
+          HSK1: "#4CAF50"
+          HSK2: "#8BC34A"
+          HSK3: "#FFC107"
+          HSK4: "#FF9800"
+          HSK5: "#F4511E"
+          HSK6: "#F44336"
+    - key: vocabulary
+      title: 重点词汇
+      renderer: table
+      columns:
+        - {key: word, label: 词}
+        - {key: reading, label: 拼音}
+        - {key: pos, label: 词性}
+        - {key: meaning, label: 释义}
+        - {key: hsk, label: HSK}

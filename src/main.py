@@ -158,9 +158,31 @@ def _build_vad(cfg: GlobalConfig):
     return vad
 
 
+def save_current_session(
+    runtime: dict,
+    output_root: Path,
+    session_name: str = "",
+) -> Path | None:
+    """退出/切换时保存当前会话。
+
+    会话名必须取运行态当前档案（runtime["profile"]），不能用启动时的档案——
+    档案切换后 recorder/目录名/分析文件的语言对都属于当前档案。
+    目录名默认为当前语言对（<源>-<目标>，由 SessionRecorder.save 生成）。
+    """
+    recorder = runtime["recorder"]
+    translator = runtime.get("translator")
+    return recorder.save(
+        output_root,
+        session_name,
+        memory=translator.memory
+        if translator is not None and translator.cfg.memory.enabled
+        else None,
+    )
+
+
 def rollover_profile(
     runtime: dict,
-    new_profile_name: str,
+    new_profile,
     *,
     cfg: GlobalConfig,
     slots,
@@ -170,7 +192,8 @@ def rollover_profile(
     session_name: str = "",
     auto_lang: bool = False,
     rollover_lock: threading.Lock | None = None,
-) -> tuple[object | None, str | None]:
+    resume: bool = True,
+) -> tuple[object | None, str | None, str]:
     """语言档案运行中切换的会话滚动（交接文档 §4.2）。
 
     流程：暂停接收新 ASR 句 → 冲刷旧 Blocker → 排空旧语法任务 → 保存旧会话
@@ -178,8 +201,11 @@ def rollover_profile(
     SessionRecorder/Blocker → 更新 ASR 语种提示 → 恢复运行。
     旧会话完整保留，新会话使用新档案，绝不混写两种源语言的分析文件。
 
+    resume=False：切换完成后不自动恢复采集，由调用方在 GUI 应用完毕后恢复
+    （避免新档案的句子在视图刷新前流入、拿到旧语种标签）。
     runtime 是可变字典，键：profile/translator/grammar/recorder/blocker/on_block；
-    回调闭包必须读 runtime 而不是捕获旧实例。返回 (新档案, None) 或 (None, 错误信息)。
+    回调闭包必须读 runtime 而不是捕获旧实例。
+    返回 (新档案, 错误信息, 旧会话保存目录)；档案名未变/出错时目录为空串。
     """
     from .nlp.blocker import Blocker
     from .nlp.grammar import GrammarAnalyzer
@@ -189,12 +215,12 @@ def rollover_profile(
     lock = rollover_lock or threading.Lock()
     with lock:
         old_profile = runtime["profile"]
-        if new_profile_name == old_profile.name:
-            return old_profile, None
-        try:
-            new_profile = get_profile(cfg.languages_dir, new_profile_name)
-        except KeyError as e:
-            return None, str(e)
+        if (
+            new_profile.name == old_profile.name
+            and new_profile.source_lang == old_profile.source_lang
+            and new_profile.target_lang == old_profile.target_lang
+        ):
+            return old_profile, None, ""
 
         streamer.set_paused(True)
         try:
@@ -205,15 +231,13 @@ def rollover_profile(
             if grammar is not None:
                 grammar.drain()
             translator = runtime.get("translator")
-            out_dir = runtime["recorder"].save(
+            out_dir = save_current_session(
+                runtime,
                 output_root or cfg.root / "output",
-                session_name or old_profile.name,
-                memory=translator.memory
-                if translator is not None and translator.cfg.memory.enabled
-                else None,
+                session_name,
             )
-            if out_dir:
-                print(f"旧会话已保存：{out_dir}")
+            saved_note = f"旧会话已保存：{out_dir}" if out_dir else "旧会话无内容未保存"
+            print(saved_note)
 
             if slots is not None:
                 slots.rebind(resolve_slots(cfg.slots, new_profile.slots, slots.registry))
@@ -231,8 +255,11 @@ def rollover_profile(
                     lease=slots.translation_lease,
                 )
                 try:
-                    tpl_path = new_translator.prompts.resolve(
-                        new_profile.prompt_path("translate"), "translate"
+                    tpl_path = new_translator.prompts.resolve_pair(
+                        "translate",
+                        new_profile.prompt_path("translate"),
+                        new_profile.source_lang,
+                        new_profile.target_lang,
                     )
                     tpl_version = new_translator.prompts.template_version(tpl_path)
                 except Exception:  # noqa: BLE001
@@ -258,15 +285,37 @@ def rollover_profile(
                 runtime["blocker"] = Blocker(merged_ctx.block, runtime["on_block"])
             runtime["profile"] = new_profile
             streamer.language_hint = None if auto_lang else new_profile.language_hint
-            print(f"已切换语言档案：{new_profile.display_name}（{old_profile.display_name} 会话已保存）")
-            return new_profile, None
+            print(
+                f"已切换语言档案：{new_profile.display_name}"
+                f"（{saved_note}）"
+            )
+            return new_profile, None, str(out_dir or "")
         finally:
-            streamer.set_paused(False)
+            if resume:
+                streamer.set_paused(False)
+
+
+def _resolve_profile(args: argparse.Namespace, cfg: GlobalConfig):
+    """确定生效语言档案：自由语言对（--source-lang/--target-lang/--auto-lang）
+    优先于档案默认对；否则用 --profile 或配置默认档案。"""
+    from .profiles.loader import build_profile, load_profiles
+
+    src = getattr(args, "source_lang", "") or ""
+    tgt = getattr(args, "target_lang", "") or ""
+    if args.auto_lang and not src:
+        src = "auto"
+    if not src and not tgt:
+        return get_profile(cfg.languages_dir, args.profile or cfg.default_profile)
+    packs = load_profiles(cfg.languages_dir)
+    base = packs.get(args.profile or cfg.default_profile)
+    default_target = base.target_lang if base is not None and base.target_lang else "zh"
+    default_source = base.source_lang if base is not None and base.source_lang else "ja"
+    return build_profile(packs, src or default_source, tgt or default_target)
 
 
 def run(args: argparse.Namespace) -> int:
     cfg = load_config(Path(args.root) if args.root else None)
-    profile = get_profile(cfg.languages_dir, args.profile or cfg.default_profile)
+    profile = _resolve_profile(args, cfg)
     print(f"语言档案：{profile.display_name}（{profile.source_lang} → {profile.target_lang}）")
 
     # ---- 模型槽位（Provider Registry + 双槽位，模型可插拔架构）----
@@ -358,8 +407,11 @@ def run(args: argparse.Namespace) -> int:
     tpl_version = 0
     if translator is not None:
         try:
-            tpl_path = translator.prompts.resolve(
-                profile.prompt_path("translate"), "translate"
+            tpl_path = translator.prompts.resolve_pair(
+                "translate",
+                profile.prompt_path("translate"),
+                profile.source_lang,
+                profile.target_lang,
             )
             tpl_version = translator.prompts.template_version(tpl_path)
         except Exception:
@@ -454,6 +506,14 @@ def run(args: argparse.Namespace) -> int:
             overlay.analysis_requested.connect(grammar.submit)
         if args.grammar and not grammar.available:
             print("⚠ 语法槽未绑定，自动语法分析停用；识别与翻译不受影响。")
+        elif grammar.available and not args.grammar:
+            # 发现性提示：功能就绪但默认不自动分析（避免 API 费用），给出手动入口
+            hint = "语法分析已就绪（未自动开启）：悬浮窗右键句块可逐句分析；加 --grammar 自动逐句分析"
+            print(f"💡 {hint}")
+            if overlay is not None:
+                overlay.subtitle_view.add_system_message(
+                    "语法分析已就绪：右键句块可逐句生成分析"
+                )
     elif args.grammar:
         print("⚠ 语法槽未绑定，自动语法分析停用；识别与翻译不受影响。")
 
@@ -554,11 +614,27 @@ def run(args: argparse.Namespace) -> int:
         overlay.pause_toggled.connect(streamer.set_paused)
         overlay.set_asr_info(f"ASR {info.model_size} @ {info.device}（{info.compute_type}）")
 
-        def _do_profile_switch(name: str) -> None:
-            """worker 线程执行会话滚动；GUI 更新经 post_to_gui 回主线程。"""
-            new_profile, err = rollover_profile(
+        def _do_profile_switch(source: str, target: str) -> None:
+            """worker 线程执行会话滚动；GUI 更新经 post_to_gui 回主线程。
+
+            切换期间保持暂停（resume=False），等 GUI 应用完新档案/语种标签后再恢复，
+            避免新档案的句子在视图刷新前流入而拿到旧语种标签。
+            """
+            from .profiles.loader import build_profile, load_profiles
+
+            try:
+                new_profile = build_profile(
+                    load_profiles(cfg.languages_dir), source, target
+                )
+            except KeyError as e:
+                streamer.set_paused(False)
+                overlay.post_to_gui(
+                    lambda: overlay.notify_profile_error(source, str(e))
+                )
+                return
+            new_profile, err, saved_dir = rollover_profile(
                 runtime,
-                name,
+                new_profile,
                 cfg=cfg,
                 slots=slots,
                 streamer=streamer,
@@ -567,28 +643,31 @@ def run(args: argparse.Namespace) -> int:
                 session_name=args.session_name or "",
                 auto_lang=args.auto_lang,
                 rollover_lock=rollover_lock,
+                resume=False,
             )
-            if err is not None:
+            if err is not None or new_profile is None:
                 log.warning("档案切换失败：%s", err)
-                overlay.post_to_gui(lambda: overlay.notify_profile_error(name, err))
+                streamer.set_paused(False)
+                overlay.post_to_gui(
+                    lambda: overlay.notify_profile_error(f"{source}→{target}", err or "")
+                )
                 return
-            assert new_profile is not None
             merged = cfg.ui.merged(new_profile.appearance)
+            notice = f"已切换语言档案：{new_profile.display_name}"
+            if saved_dir:
+                notice += f"（旧会话已保存：{saved_dir}）"
 
             def apply():
-                overlay.apply_profile(
-                    new_profile,
-                    merged_ui=merged,
-                    notice=f"已切换语言档案：{new_profile.display_name}",
-                )
+                overlay.apply_profile(new_profile, merged_ui=merged, notice=notice)
                 grammar = runtime["grammar"]
                 overlay.set_grammar_enabled(bool(grammar and grammar.available))
+                streamer.set_paused(False)  # GUI 应用完毕后恢复采集
 
             overlay.post_to_gui(apply)
 
-        overlay.profile_change_requested.connect(
-            lambda name: threading.Thread(
-                target=_do_profile_switch, args=(name,),
+        overlay.pair_change_requested.connect(
+            lambda source, target: threading.Thread(
+                target=_do_profile_switch, args=(source, target),
                 name="profile-switch", daemon=True,
             ).start()
         )
@@ -643,10 +722,10 @@ def run(args: argparse.Namespace) -> int:
                     n = len(translator.memory.glossary)
                     print(f"滚动记忆：术语 {n} 条"
                           + (f"，风格：{translator.memory.style_notes}" if translator.memory.style_notes else ""))
-            out_dir = recorder.save(
+            out_dir = save_current_session(
+                runtime,
                 Path(args.output) if args.output else cfg.root / "output",
-                args.session_name or profile.name,
-                memory=translator.memory if translator and translator.cfg.memory.enabled else None,
+                args.session_name or "",
             )
             if out_dir:
                 print(f"会话文件已保存：{out_dir}")
@@ -695,23 +774,37 @@ def run_replay_session(args: argparse.Namespace) -> int:
     cfg = load_config(Path(args.root) if args.root else None)
     if args.replay_session:
         document = load_session_document(args.replay_session)
-        profile_name = args.profile or document.language_profile or cfg.default_profile
-        profile = get_profile(cfg.languages_dir, profile_name)
-        if document.language_profile and document.language_profile != profile.name:
-            raise SystemExit(
-                f"会话使用语言档案 {document.language_profile}，不能按 {profile.name} 重载"
-            )
-        if document.source_lang and document.source_lang != profile.source_lang:
+        profile = _resolve_replay_profile(args, cfg, document)
+        if document.source_lang and document.source_lang != "auto" and (
+            profile.source_lang != document.source_lang
+        ):
             raise SystemExit(
                 f"会话源语言 {document.source_lang} 与档案 {profile.name} 的 {profile.source_lang} 不一致"
             )
     else:
         # 外部 SRT 独立回放：完整块读取，保留多行原文
         document = document_from_srt(args.srt)
-        profile = get_profile(cfg.languages_dir, args.profile or cfg.default_profile)
+        profile = _resolve_replay_profile(args, cfg, document)
     return run_session_preview(
         document, profile, cfg.ui.opacity, media_path=args.media, ui=cfg.ui
     )
+
+
+def _resolve_replay_profile(args, cfg, document):
+    """回放档案解析：--profile 指定 → 档案名；否则按会话文档的源/目标语言合成
+    （兼容 auto 与 pair 命名，不再要求档案名必须存在于语言包）。"""
+    from .profiles.loader import build_profile, load_profiles
+
+    packs = load_profiles(cfg.languages_dir)
+    name = args.profile or ""
+    if name and name in packs:
+        return packs[name]
+    src = document.source_lang or cfg.default_profile
+    tgt = document.target_lang or (packs[src].target_lang if src in packs else "zh")
+    try:
+        return build_profile(packs, src, tgt)
+    except KeyError:
+        return get_profile(cfg.languages_dir, cfg.default_profile)
 
 
 def run_batch(args: argparse.Namespace) -> int:
@@ -768,6 +861,145 @@ def run_batch(args: argparse.Namespace) -> int:
         registry.close_all()  # 全部文件完成（翻译/语法排空）后回收本地 Provider
 
 
+def _check_bound_providers(registry, slots, *, grammar_enabled: bool, on_error) -> None:
+    """启动健康检查：拉起本地托管 Provider / ping 云端（worker 线程执行）。
+
+    本地 llama.cpp Provider 只有 ensure_available 才会拉起子进程——缺了这一步，
+    批处理的所有 LLM 请求都会连接失败。必须在构建 runner 之前调用。
+    """
+    from .nlp.providers import SLOT_GRAMMAR, SLOT_TRANSLATION
+
+    for slot in (SLOT_TRANSLATION, SLOT_GRAMMAR):
+        if slot == SLOT_GRAMMAR and not grammar_enabled:
+            continue
+        pid = slots.resolution.provider_id(slot)
+        if not pid:
+            continue
+        err = registry.check_health(pid)
+        if err:
+            on_error(slot, err)
+
+
+def run_batch_window(args: argparse.Namespace, files: list[str]) -> int:
+    """批处理 + 进度窗口（启动器入口）：与 CLI --batch 相同的管线，UI 独立。"""
+    cfg = load_config(Path(args.root) if args.root else None)
+    profile = get_profile(cfg.languages_dir, args.profile or cfg.default_profile)
+
+    from .nlp.providers import ProviderRegistry
+    from .nlp.slots import ModelSlots, resolve_slots
+    from .offline.runner import OfflineRunner
+
+    _apply_profile_llm_override(cfg, profile)
+    registry = ProviderRegistry.from_config(cfg)
+    slots = ModelSlots(registry, resolve_slots(cfg.slots, profile.slots, registry))
+
+    from PyQt6.QtWidgets import QApplication
+
+    from .ui.batch_window import create_batch_shell
+    from .ui.i18n import set_language
+
+    set_language(cfg.ui.ui_language, cfg.root / "config" / "locales")
+    app = QApplication.instance() or QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(True)  # 批处理窗口关闭即结束
+
+    window = create_batch_shell(files)
+    window.show()
+
+    def work() -> None:
+        """worker：拉起 Provider + 加载 ASR 模型并构建 runner（GUI 不阻塞）。"""
+        from .asr.engine import ModelLoadError
+
+        # 先拉起绑定 Provider（本地 llama-server 在此启动），失败只警告不阻断
+        _check_bound_providers(
+            registry, slots, grammar_enabled=args.grammar,
+            on_error=lambda slot, err: window._emit(
+                "log", text=f"⚠ {err}"
+            ),
+        )
+        try:
+            engine = ASREngine(cfg.asr)
+        except ModelLoadError as e:
+            window._emit("file_error", path="", error=f"ASR 模型加载失败：{e}")
+            window._emit("__done__", {"rc": 1})
+            return
+        runner = OfflineRunner(
+            cfg,
+            profile,
+            output_root=Path(args.output) if args.output else cfg.root / "output",
+            engine=engine,
+            vad_fn=_build_vad(cfg),
+            slots=slots,
+            grammar_enabled=args.grammar,
+        )
+        window._emit("__ready__", {"runner": runner})
+
+    threading.Thread(target=work, name="batch-setup", daemon=True).start()
+    app.exec()
+    registry.close_all()
+    return window.return_code or 0
+
+
+def run_launcher(args: argparse.Namespace) -> int:
+    """启动入口窗口：收集模式与参数后分发到实时/批处理/回放。"""
+    cfg = load_config(Path(args.root) if args.root else None)
+
+    from PyQt6.QtWidgets import QApplication
+
+    from .profiles.loader import load_profiles
+    from .ui.i18n import set_language
+    from .ui.launcher import create_launcher
+
+    set_language(cfg.ui.ui_language, cfg.root / "config" / "locales")
+    app = QApplication.instance() or QApplication(sys.argv)
+    profiles = list(load_profiles(cfg.languages_dir).values())
+    launcher = create_launcher(
+        profiles, default_profile=args.profile or cfg.default_profile,
+        default_source=cfg.audio.source,
+    )
+    # 模态 exec：启动/退出都使对话框立即返回，不依赖"最后窗口关闭"语义
+    launcher.exec()
+    params = launcher.result_params
+    if params is None:
+        return 0  # 用户取消
+
+    args.profile = None  # 自由语言对模式：档案由 source/target 合成
+    args.debug = params.debug
+    args.source_lang = params.source_lang
+    args.target_lang = params.target_lang
+    args.auto_lang = params.source_lang == "auto"
+    if params.mode == "realtime":
+        args.source = params.source
+        args.loopback_device = params.loopback_device
+        args.grammar = params.grammar
+        return run(args)
+    if params.mode == "batch":
+        args.grammar = params.grammar
+        return run_batch_window(args, params.files)
+    # 回放
+    args.replay_session = params.session_dir or None
+    args.srt = params.srt or None
+    args.media = params.media or None
+    return run_replay_session(args)
+
+
+def _wants_launcher(args: argparse.Namespace) -> bool:
+    """无模式相关 CLI 参数时进入启动器；带参数保持脚本化直启。"""
+    return not (
+        args.source
+        or args.input
+        or args.profile  # 显式指定档案 = 脚本化直启，跳过启动器
+        or args.source_lang
+        or args.target_lang
+        or args.batch
+        or args.replay_session
+        or args.srt
+        or args.list_devices
+        or args.list_providers
+        or args.download_model
+        or args.no_overlay
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="实时语音识别翻译工具（M3 学习闭环）")
     parser.add_argument("--source", choices=["mic", "loopback", "file"], default=None,
@@ -778,6 +1010,8 @@ def main() -> int:
     parser.add_argument("--list-devices", action="store_true",
                         help="列出麦克风与 loopback 设备后退出")
     parser.add_argument("--profile", help="语言档案名（config/languages/<name>.yaml）")
+    parser.add_argument("--source-lang", help="源语言代码（如 ja/en/zh；配合 --target-lang 自由组合）")
+    parser.add_argument("--target-lang", help="目标语言代码（如 zh/en/ja；配合 --source-lang 自由组合）")
     parser.add_argument("--root", help="项目根目录（默认自动查找）")
     parser.add_argument("--no-translate", action="store_true", help="仅识别不翻译")
     parser.add_argument("--grammar", action="store_true",
@@ -810,6 +1044,8 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         stream=sys.stderr,
     )
+    if _wants_launcher(args):
+        return run_launcher(args)
     if args.replay_session or args.srt:
         return run_replay_session(args)
     if args.batch:

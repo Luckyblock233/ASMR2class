@@ -45,6 +45,31 @@ class PromptEngine:
             + "）"
         )
 
+    def resolve_pair(
+        self, kind: str, rel_path: str | None, source_lang: str, target_lang: str
+    ) -> Path:
+        """语言对感知解析：<源>-<目标>/<kind>.txt → 包内路径 → _default 兜底。
+
+        自由语言对模式下，pair 目录（如 ja-en/）承载特定语言对的定制模板；
+        源语言为 auto 时跳过 pair 目录。
+        """
+        candidates = []
+        if source_lang and source_lang != "auto" and target_lang:
+            candidates.append(
+                self.prompts_dir / f"{source_lang}-{target_lang}" / f"{kind}.txt"
+            )
+        if rel_path:
+            candidates.append(self.prompts_dir / rel_path)
+        candidates.append(self.prompts_dir / "_default" / f"{kind}.txt")
+        for c in candidates:
+            if c.is_file():
+                return c
+        raise PromptTemplateError(
+            f"未找到 prompt 模板：{kind}（{source_lang}→{target_lang}，已尝试："
+            + ", ".join(str(c) for c in candidates)
+            + "）"
+        )
+
     def _load(self, path: Path) -> str:
         mtime = path.stat().st_mtime
         cached = self._cache.get(path)

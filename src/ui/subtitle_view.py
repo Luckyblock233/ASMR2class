@@ -442,9 +442,10 @@ class SubtitleView(QWidget):
 
         self.back_to_bottom = QToolButton(self)
         self.back_to_bottom.setObjectName("backToBottom")
-        self.back_to_bottom.setText("回到底部 ↓")
+        # 回放模式：定位到当前播放句（底部是最后一句而非正在播放的）
+        self.back_to_bottom.setText("回到当前句 ↓" if replay_mode else "回到底部 ↓")
         self.back_to_bottom.setVisible(False)
-        self.back_to_bottom.clicked.connect(self.scroll_to_bottom)
+        self.back_to_bottom.clicked.connect(self._on_back_button)
 
         scrollbar = self.scroll_area.verticalScrollBar()
         scrollbar.valueChanged.connect(self._on_scroll_value_changed)
@@ -460,12 +461,32 @@ class SubtitleView(QWidget):
     def following(self) -> bool:
         return self._follow
 
+    def _on_back_button(self) -> None:
+        if self._replay_mode:
+            self.scroll_to_current()
+        else:
+            self.scroll_to_bottom()
+
     def scroll_to_bottom(self) -> None:
         """回到底部并恢复跟随。"""
         self._follow = True
         self.back_to_bottom.setVisible(False)
         self._scroll_to_bottom()
         QTimer.singleShot(0, self._scroll_to_bottom)
+
+    def scroll_to_current(self) -> None:
+        """回放：定位到当前播放句并恢复跟随（当前句变化时才滚动）。"""
+        self._follow = True
+        self.back_to_bottom.setVisible(False)
+        block = self._blocks.get(self._current_id) if self._current_id is not None else None
+        if block is not None:
+            self._ensure_visible(block)
+
+    def _ensure_visible(self, block) -> None:
+        """程序化滚动（不触发"用户上翻"判定）。"""
+        self._programmatic_scroll = True
+        self.scroll_area.ensureWidgetVisible(block)
+        self._programmatic_scroll = False
 
     def _scroll_to_bottom(self) -> None:
         scrollbar = self.scroll_area.verticalScrollBar()
@@ -550,7 +571,7 @@ class SubtitleView(QWidget):
         if block is not None:
             block.set_current(True)
             if self._follow:
-                self.scroll_area.ensureWidgetVisible(block)
+                self._ensure_visible(block)
 
     def set_display_order(self, order: str) -> None:
         self.display_order = _normalized_order(order)

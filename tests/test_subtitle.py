@@ -70,13 +70,13 @@ def test_session_recorder_saves_all_files(tmp_path):
     assert (out_dir / "transcript.txt").is_file()
     assert (out_dir / "original.srt").is_file()
     assert (out_dir / "bilingual.srt").is_file()
-    assert (out_dir / "analysis.ja.json").is_file()  # 分析文件名带语言标识
+    assert (out_dir / "analysis.ja.zh.json").is_file()  # 分析文件名带语言标识
     assert (out_dir / "memory.json").is_file()
 
     txt = (out_dir / "transcript.txt").read_text(encoding="utf-8")
     assert txt == "おはよう\nさようなら\n"
 
-    analysis = json.loads((out_dir / "analysis.ja.json").read_text(encoding="utf-8"))
+    analysis = json.loads((out_dir / "analysis.ja.zh.json").read_text(encoding="utf-8"))
     assert analysis["language_profile"] == "ja"
     assert analysis["prompt_template_version"] == 3
     assert len(analysis["segments"]) == 2

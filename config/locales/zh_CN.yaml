@@ -113,3 +113,39 @@ settings.msg.memory_saved: 记忆已保存
 settings.appearance.theme: 主题
 settings.appearance.theme.dark: 夜间模式
 settings.appearance.theme.light: 白天模式
+launcher.title: ASR2class 启动
+launcher.mode.realtime: 实时（麦克风/系统音）
+launcher.mode.batch: 离线批处理
+launcher.mode.replay: 会话回放
+launcher.source: 音频来源
+launcher.source.mic: 麦克风
+launcher.source.loopback: 系统音内录（loopback）
+launcher.loopback: 内录设备
+launcher.loopback_hint: 设备名关键词（留空 = 默认输出设备）
+launcher.grammar: 自动后台语法分析（产生额外 API 请求）
+launcher.debug: 调试模式（完整输出 LLM 请求/响应）
+launcher.files.add: 添加文件…
+launcher.files.remove: 移除选中
+launcher.replay.session: 会话目录
+launcher.replay.media: 媒体文件（可选）
+launcher.replay.srt: 外部 SRT（可选）
+launcher.browse: 浏览…
+launcher.start: 启动
+launcher.quit: 退出
+launcher.error.no_files: 离线批处理需要至少一个媒体文件
+launcher.error.no_replay_input: 回放需要会话目录或外部 SRT 之一
+batch.title: 离线批处理
+batch.progress: 文件进度
+batch.cancel: 取消
+batch.close: 关闭
+batch.file_start: 开始处理
+batch.file_done: 完成
+batch.file_error: 失败
+batch.cancelled: 已取消
+batch.cancelling: 正在取消（保存已完成部分）…
+batch.all_done: 批处理完成：{ok}/{total} 成功
+launcher.source_lang: 源语言
+launcher.target_lang: 目标语言
+overlay.source_lang: 源语言
+overlay.target_lang: 目标语言
+overlay.lang.auto: 自动识别

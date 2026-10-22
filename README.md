@@ -34,11 +34,13 @@ $env:HF_ENDPOINT="https://hf-mirror.com"; $env:HF_HUB_DISABLE_XET="1"
 ## 使用
 
 ```
-uv run python -m src.main                        # 麦克风 + config.yaml 默认档案
-uv run python -m src.main --source loopback      # 系统音内录（仅 Windows）
+uv run python -m src.main                        # 启动入口窗口（选择模式/档案/参数）
+uv run python -m src.main --source loopback      # 实时：系统音内录（仅 Windows），跳过启动器
 uv run python -m src.main --list-devices         # 列出麦克风与可内录的输出设备
 uv run python -m src.main --source loopback --loopback-device "扬声器"  # 指定输出设备
-uv run python -m src.main --source file --input a.wav --profile en   # 文件模拟
+uv run python -m src.main --source file --input a.wav --profile en   # 文件模拟（档案默认语言对）
+uv run python -m src.main --source-lang ja --target-lang en          # 自由语言对：日译英
+uv run python -m src.main --auto-lang --target-lang zh               # 源语言自动识别
 uv run python -m src.main --no-translate         # 仅识别不翻译（离线调试）
 uv run python -m src.main --grammar              # 自动后台语法分析（默认不开启，避免额外 API 费用）
 uv run python -m src.main --replay-session output/<日期>-<会话名>            # 重载句块与语法卡
@@ -54,6 +56,8 @@ uv run python -m src.main --session-name 动漫01  # 自定义会话名（输出
 uv run python -m src.main -v                     # 调试日志（可见实际发送的 prompt，密钥除外）
 ```
 
+不带模式参数启动时弹出**启动入口窗口**：实时（mic/loopback，进悬浮窗）/ 离线批处理（进独立进度窗口，逐文件状态 + 日志 + 取消）/ 回放（会话目录或外部 SRT + 媒体）。带任何模式参数（`--source`/`--batch`/`--replay-session`/`--srt`/`--profile` 等）则跳过启动器，保持脚本化直启。
+
 loopback 设备选择：`--loopback-device` 用设备名的任意一段做（大小写不敏感的）包含匹配；也可写入 `config.yaml` 的 `audio.loopback_device` 作为默认。留空则跟随系统默认输出设备。
 
 运行中按 `Ctrl+C` 结束会话。
@@ -64,7 +68,8 @@ loopback 设备选择：`--loopback-device` 用设备名的任意一段做（大
 | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | `config/config.example.yaml`      | 入库的配置模板（不含任何密钥）                                                                                                         |
 | `config/config.yaml`              | 本地配置，**已 gitignore**：首次运行由 example 自动复制创建，向导/手动编辑都写入它                                                     |
-| `config/languages/<lang>.yaml`    | 语言档案：语言对、ASR 语种提示、LLM 覆盖、prompt 模板路径                                                                              |
+| `config/languages/<lang>.yaml`    | 语言包：语种提示、默认目标语言、语法 prompt/语法卡、档案级槽位覆盖                                                                              |
+| `config/prompts/<src>-<tgt>/`     | 特定语言对的定制翻译模板（可选；解析顺序：pair 目录 → 包内路径 → `_default/`）                                                                |
 | `config/prompts/**/translate.txt` | 翻译模板，`#` 开头为注释，支持 `{source_lang}/{target_lang}/{sentences}/{context_history}/{glossary}/{style_notes}` 变量，改后即时生效 |
 | `config/prompts/**/grammar.txt`   | M3 语法分析模板，支持 `{source_lang}/{target_lang}/{sentence}/{translation}/{level_hint}`；缺失时回落 `_default/grammar.txt` |
 
@@ -141,7 +146,7 @@ slots:
 
 - **A–D 悬浮窗**：A 栏（菜单：穿透/置顶/自动滚动/紧凑/字幕显隐 + 运行暂停/清空显示/设置/关闭）、B 栏（档案切换 + 槽位下拉，能力过滤，主行模型名、细节 tooltip）、C 栏（RMS/VAD、CPU/RAM/GPU/VRAM、句数与 ASR/翻译耗时，阈值着色可配置 `ui.latency_*` / `ram_warn_percent`；服务状态点 ●运行中 ●降级 ●错误 ○停止，点击查看最近错误）、D 区（翻译占位/失败状态行、上翻暂停跟随 + 回到底部、容量上限 `ui.view_capacity`、条目分隔线）。
 - **外观**：白天/夜间两套预定义主题（`ui.theme`）+ 背景不透明度（RGBA 背景，文字不随窗口变淡）、行距、窗口尺寸、栏目显隐、紧凑模式、中/英界面文案（`config/locales/*.yaml`）。设置页修改即时预览、应用后原子落盘；语言档案 `appearance:` 节可覆盖。
-- **档案运行中切换**：B 栏切换档案即「会话滚动」——暂停接收新句 → 冲刷/排空 → 旧会话落盘 → 新档案重建翻译/语法/记忆/文档，绝不混写两种源语言的 analysis 文件。
+- **档案运行中切换**：B 栏可分别切换源语言（含「自动识别」）与目标语言，即「会话滚动」——暂停接收新句 → 冲刷/排空 → 旧会话落盘 → 新语言对重建翻译/语法/记忆/文档，绝不混写两种源语言的 analysis 文件。保存的分析文件名标注语言对：`analysis.<源>.<目标>.json`（源为自动识别时是 `analysis.auto.<目标>.json`）。
 - **回放**：`--replay-session <dir> --media <媒体>` 或界面「打开媒体」；媒体时钟驱动当前句高亮，单击句块 seek（双击或右键弹语法卡，两种手势分离）；`--srt` 外部字幕完整块读取保留多行。
 - **离线批处理**：`--batch 文件…` 走 PyAV 流式解码（拉取式背压，不丢音频），离线块上限 `context.block.max_sentences_offline`（默认 20）实际生效；顺序翻译保持滚动记忆顺序，语法排空后才保存；逐文件失败隔离，Ctrl+C 保存已完成部分后退出。
 - **记忆编辑**：设置页「记忆」页签查看/增删改术语与风格（`style_preset` 锁定时只读）；编辑实时会话同一实例，下一次翻译立即生效；`memory.json` 严格校验（空字段/重复术语/档案不匹配报错）、原子保存；「Prompt」页签可打开模板目录、恢复默认模板（自动 .bak 备份，mtime 热重载即时生效）。

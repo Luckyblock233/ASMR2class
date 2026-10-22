@@ -83,12 +83,16 @@ class FakePlayer:
 
     def __init__(self):
         self.positions: list[int] = []
+        self.stopped = False
 
     def setPosition(self, ms: int) -> None:
         self.positions.append(ms)
 
     def duration(self) -> int:
         return 0
+
+    def stop(self) -> None:
+        self.stopped = True
 
 
 def test_replay_window_seek_and_highlight_with_fake_clock(qapp):
@@ -121,3 +125,47 @@ def test_replay_window_missing_media_shows_error(qapp, tmp_path):
     assert window.load_media(tmp_path / "不存在.mp4") is False
     assert window.error_label.text()  # 媒体加载错误有可见提示
     window.close()
+
+
+def test_replay_window_close_stops_playback(qapp):
+    """回归：关闭媒体窗口必须停止播放（否则音频在后台继续）。"""
+    from src.ui.i18n import set_language
+    from src.ui.player import create_replay_window
+
+    set_language("zh_CN", PROJECT_ROOT / "config" / "locales")
+    window = create_replay_window(_document())
+    stopped = []
+    window.player.stop = lambda: stopped.append(True)
+    window.close()
+    assert stopped == [True]
+
+
+def test_back_button_jumps_to_current_in_replay(qapp):
+    """回放模式的跟随按钮是「回到当前句」而非回到底部。"""
+    from src.ui.subtitle_view import SubtitleView
+
+    view = SubtitleView(replay_mode=True, read_only=True)
+    view.resize(360, 120)
+    view.show()
+    assert "当前句" in view.back_to_bottom.text()
+
+    doc = _document()
+    for seg in doc.segments:
+        view.upsert_segment(seg)
+    # 扩充内容使可滚动
+    from src.subtitle.document import Segment
+
+    for i in range(4, 40):
+        view.upsert_segment(Segment(id=i, start=i, end=i + 0.5, source=f"句{i}"))
+    qapp.processEvents()
+    view.set_current_segment(20)
+    view.scroll_area.verticalScrollBar().setValue(0)  # 用户上翻
+    qapp.processEvents()
+    assert not view.following
+
+    view.back_to_bottom.click()
+    qapp.processEvents()
+    assert view.following
+    bar = view.scroll_area.verticalScrollBar()
+    assert bar.value() != bar.maximum()  # 定位到第 20 句而非底部
+    view.close()

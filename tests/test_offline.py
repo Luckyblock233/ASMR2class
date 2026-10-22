@@ -193,9 +193,9 @@ def test_offline_pipeline_end_to_end(tmp_path):
     out_dir = runner.run_file("fake.mp4")
     assert out_dir is not None
     names = {p.name for p in out_dir.iterdir()}
-    assert {"transcript.txt", "original.srt", "bilingual.srt", "analysis.ja.json", "memory.json"} <= names
+    assert {"transcript.txt", "original.srt", "bilingual.srt", "analysis.ja.zh.json", "memory.json"} <= names
 
-    payload = json.loads((out_dir / "analysis.ja.json").read_text(encoding="utf-8"))
+    payload = json.loads((out_dir / "analysis.ja.zh.json").read_text(encoding="utf-8"))
     assert len(payload["segments"]) == 4
     assert payload["segments"][0]["source"] == "句1"
     assert payload["segments"][0]["translation"] == "译-句1"

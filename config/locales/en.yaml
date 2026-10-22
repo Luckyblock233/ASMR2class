@@ -122,3 +122,39 @@ settings.msg.memory_saved: Memory saved
 settings.appearance.theme: Theme
 settings.appearance.theme.dark: Dark
 settings.appearance.theme.light: Light
+launcher.title: ASR2class Launcher
+launcher.mode.realtime: Realtime (mic/loopback)
+launcher.mode.batch: Offline batch
+launcher.mode.replay: Session replay
+launcher.source: Audio source
+launcher.source.mic: Microphone
+launcher.source.loopback: System audio (loopback)
+launcher.loopback: Loopback device
+launcher.loopback_hint: Device name keyword (empty = default output)
+launcher.grammar: Auto background grammar analysis (extra API calls)
+launcher.debug: Debug mode (full LLM request/response logging)
+launcher.files.add: Add files…
+launcher.files.remove: Remove selected
+launcher.replay.session: Session directory
+launcher.replay.media: Media file (optional)
+launcher.replay.srt: External SRT (optional)
+launcher.browse: Browse…
+launcher.start: Start
+launcher.quit: Quit
+launcher.error.no_files: Offline batch needs at least one media file
+launcher.error.no_replay_input: Replay needs a session directory or an external SRT
+batch.title: Offline Batch
+batch.progress: Files
+batch.cancel: Cancel
+batch.close: Close
+batch.file_start: Processing
+batch.file_done: Done
+batch.file_error: Failed
+batch.cancelled: Cancelled
+batch.cancelling: Cancelling (saving completed part)…
+batch.all_done: 'Batch finished: {ok}/{total} succeeded'
+launcher.source_lang: Source language
+launcher.target_lang: Target language
+overlay.source_lang: Source
+overlay.target_lang: Target
+overlay.lang.auto: Auto-detect

@@ -75,3 +75,74 @@ def get_profile(languages_dir: Path, name: str) -> LanguageProfile:
         available = ", ".join(profiles) or "(无)"
         raise KeyError(f"语言档案 '{name}' 不存在，可用档案：{available}")
     return profiles[name]
+
+
+AUTO_LANG = "auto"  # 源语言自动识别
+
+# 自动识别源语言时的通用语法卡区块（语言无关）
+_GENERIC_GRAMMAR_CARD: dict[str, Any] = {
+    "grammar_card": {
+        "sections": [
+            {"key": "structure", "title": "句子结构", "renderer": "tree"},
+            {"key": "grammar_points", "title": "语法点", "renderer": "cards",
+             "title_field": "name",
+             "body_fields": [{"key": "explanation", "label": "讲解"},
+                             {"key": "example", "label": "例句"}]},
+            {"key": "vocabulary", "title": "重点词汇", "renderer": "table",
+             "columns": [{"key": "word", "label": "词"},
+                         {"key": "meaning", "label": "释义"}]},
+        ]
+    }
+}
+
+
+def build_profile(
+    packs: dict[str, LanguageProfile],
+    source: str,
+    target: str,
+) -> LanguageProfile:
+    """按（源语言包 | auto）× 目标语言合成运行时档案。
+
+    - 档案 = 语言包：语法卡/语法 prompt/档案级覆盖来自源语言包
+    - target 覆盖包的默认目标语言
+    - source='auto'：中性档案（ASR 自动检测、_default 模板、通用语法卡）
+    """
+    target_pack = packs.get(target)
+    target_display = target_pack.display_name if target_pack else target
+    if source == AUTO_LANG:
+        return LanguageProfile(
+            name=f"{AUTO_LANG}-{target}",
+            language=AUTO_LANG,
+            display_name=f"自动识别 → {target_display}",
+            source_lang=AUTO_LANG,
+            target_lang=target,
+            language_hint=None,
+            raw=dict(_GENERIC_GRAMMAR_CARD),
+        )
+    pack = packs.get(source)
+    if pack is None:
+        available = ", ".join(packs) or "(无)"
+        raise KeyError(f"语言包 '{source}' 不存在，可用：{available}")
+    # 复制包并覆盖目标语言（不改原包）
+    return LanguageProfile(
+        name=pack.name,
+        language=pack.language,
+        display_name=pack.display_name,
+        source_lang=pack.source_lang or pack.language,
+        target_lang=target,
+        language_hint=pack.language_hint,
+        llm_override=dict(pack.llm_override),
+        prompts=dict(pack.prompts),
+        subtitle=dict(pack.subtitle),
+        context=dict(pack.context),
+        slots=dict(pack.slots),
+        style_preset=pack.style_preset,
+        raw=pack.raw,
+        path=pack.path,
+    )
+
+
+def target_choices(packs: dict[str, LanguageProfile]) -> list[LanguageProfile]:
+    """可选目标语言（现有语言包的语言代码）。"""
+    return list(packs.values())
+

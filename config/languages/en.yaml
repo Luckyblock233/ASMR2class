@@ -1,4 +1,5 @@
-# config/languages/en.yaml —— 英语学习档案
+# config/languages/en.yaml —— 英语语言包
+# 语义同上（ja.yaml 注释）：language_pair.target 为默认目标语言，运行时可改。
 language: en
 display_name: 英语
 language_pair:

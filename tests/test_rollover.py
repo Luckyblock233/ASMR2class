@@ -68,15 +68,15 @@ def test_rollover_saves_old_session_and_rebuilds(tmp_path):
     old_translator = runtime["translator"]
     old_blocker = runtime["blocker"]
 
-    new_profile, err = rollover_profile(
-        runtime, "en",
+    new_profile, err, saved_dir = rollover_profile(
+        runtime, get_profile(cfg.languages_dir, "en"),
         cfg=cfg, slots=slots, streamer=streamer,
         output_root=tmp_path, session_name="",
     )
     assert err is None and new_profile.name == "en"
 
     # 1. 旧会话完整保存（单语言文件，不混写）
-    saved = list(tmp_path.glob("*/analysis.ja.json"))
+    saved = list(tmp_path.glob("*/analysis.ja.zh.json"))
     assert len(saved) == 1
     content = saved[0].read_text(encoding="utf-8")
     assert "おはよう" in content and "早上好" in content
@@ -100,8 +100,8 @@ def test_rollover_saves_old_session_and_rebuilds(tmp_path):
 
 def test_rollover_without_translation(tmp_path):
     cfg, slots, runtime, streamer = _make_runtime(tmp_path, translate=False)
-    new_profile, err = rollover_profile(
-        runtime, "en", cfg=cfg, slots=slots, streamer=streamer, output_root=tmp_path,
+    new_profile, err, saved_dir = rollover_profile(
+        runtime, get_profile(cfg.languages_dir, "en"), cfg=cfg, slots=slots, streamer=streamer, output_root=tmp_path,
     )
     assert err is None
     assert runtime["translator"] is None  # 不翻译模式不创建 Translator
@@ -111,21 +111,23 @@ def test_rollover_without_translation(tmp_path):
 
 
 def test_rollover_unknown_profile_keeps_runtime(tmp_path):
+    """未知语言包在 build_profile 阶段报错，rollover 不会被调用。"""
+    import pytest
+
+    from src.profiles.loader import build_profile, load_profiles
+
     cfg, slots, runtime, streamer = _make_runtime(tmp_path)
-    new_profile, err = rollover_profile(
-        runtime, "no-such-lang", cfg=cfg, slots=slots, streamer=streamer,
-        output_root=tmp_path,
-    )
-    assert new_profile is None and err
-    assert runtime["profile"].name == "ja"  # 运行态不变
-    assert streamer.paused_states == []  # 档案解析失败不应暂停
-    assert list(tmp_path.iterdir()) == []  # 也不产生会话目录
+    with pytest.raises(KeyError):
+        build_profile(load_profiles(cfg.languages_dir), "no-such-lang", "zh")
+    assert runtime["profile"].name == "ja"
+    assert streamer.paused_states == []
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_rollover_same_profile_is_noop(tmp_path):
     cfg, slots, runtime, streamer = _make_runtime(tmp_path)
-    profile, err = rollover_profile(
-        runtime, "ja", cfg=cfg, slots=slots, streamer=streamer, output_root=tmp_path,
+    profile, err, _dir = rollover_profile(
+        runtime, runtime["profile"], cfg=cfg, slots=slots, streamer=streamer, output_root=tmp_path,
     )
     assert err is None and profile.name == "ja"
     assert streamer.paused_states == []
@@ -141,12 +143,59 @@ def test_rollover_flushes_pending_block(tmp_path):
     # 与真实流程一致：ASR 句先登记文档（占位），再喂 Blocker
     runtime["recorder"].add(1.5, 2.0, "残りの文", None)
     blocker.feed(Sentence(1.5, 2.0, "残りの文"))
-    new_profile, err = rollover_profile(
-        runtime, "en", cfg=cfg, slots=slots, streamer=streamer, output_root=tmp_path,
+    new_profile, err, saved_dir = rollover_profile(
+        runtime, get_profile(cfg.languages_dir, "en"), cfg=cfg, slots=slots, streamer=streamer, output_root=tmp_path,
     )
     assert err is None
     # 残余句已随旧会话保存（无 Provider，仅原文）
-    saved = list(tmp_path.glob("*/analysis.ja.json"))
+    saved = list(tmp_path.glob("*/analysis.ja.zh.json"))
     assert len(saved) == 1
     assert "残りの文" in saved[0].read_text(encoding="utf-8")
+    runtime["grammar"].drain()
+
+
+def test_rollover_returns_saved_dir_and_resume_control(tmp_path):
+    """返回旧会话保存目录；resume=False 时保持暂停，由调用方恢复（GUI 竞态防护）。"""
+    cfg, slots, runtime, streamer = _make_runtime(tmp_path)
+    new_profile, err, saved_dir = rollover_profile(
+        runtime, get_profile(cfg.languages_dir, "en"), cfg=cfg, slots=slots, streamer=streamer,
+        output_root=tmp_path, resume=False,
+    )
+    assert err is None
+    assert saved_dir and (tmp_path / saved_dir.split("/")[-1].split("\\")[-1]).exists() \
+        or Path(saved_dir).exists()
+    assert "analysis.ja.zh.json" in str(list(Path(saved_dir).iterdir()))
+    assert streamer.paused_states == [True]  # 未恢复
+    streamer.set_paused(False)             # 调用方（GUI 应用完毕）恢复
+    runtime["grammar"].drain()
+
+
+def test_stylesheets_balanced_and_valid():
+    """回归：生成的样式表不得有非法花括号（f-string 转义泄漏曾导致解析失败）。"""
+    from src.ui.appearance import THEMES, AppearanceSpec
+
+    for theme in THEMES.values():
+        spec = AppearanceSpec(theme=theme)
+        for css in (spec.block_stylesheet, spec.bars_stylesheet, spec.menu_stylesheet):
+            assert css.count("{") == css.count("}"), css
+            assert "}}" not in css and "{{" not in css
+
+
+def test_exit_save_uses_current_profile_not_startup(tmp_path):
+    """回归：切换档案后退出，保存目录名与分析文件语言对都属于当前档案。"""
+    from src.main import save_current_session
+
+    cfg, slots, runtime, streamer = _make_runtime(tmp_path)
+    en = get_profile(cfg.languages_dir, "en")
+    new_profile, err, _ = rollover_profile(
+        runtime, en, cfg=cfg, slots=slots, streamer=streamer, output_root=tmp_path,
+    )
+    assert err is None
+    runtime["recorder"].add(0.0, 1.0, "hello", "你好")
+
+    out_dir = save_current_session(runtime, tmp_path / "exit")
+    assert out_dir is not None
+    assert out_dir.name.endswith("-en-zh")                  # 目录名是当前语言对
+    assert (out_dir / "analysis.en.zh.json").is_file()      # 文件语言对也是当前档案
+    assert not list(out_dir.glob("analysis.ja.*.json"))     # 没有启动档案的残留
     runtime["grammar"].drain()

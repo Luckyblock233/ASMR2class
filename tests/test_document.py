@@ -58,7 +58,7 @@ def test_analysis_roundtrip_preserves_ids_order_and_metadata(tmp_path):
     assert loaded.grammar_provider == "grammar-x"
     assert loaded.grammar_model == "model-y"
 
-    payload = json.loads((out_dir / "analysis.ja.json").read_text(encoding="utf-8"))
+    payload = json.loads((out_dir / "analysis.ja.zh.json").read_text(encoding="utf-8"))
     assert [s["id"] for s in payload["segments"]] == [first, second]
 
 
@@ -67,7 +67,7 @@ def test_reload_falls_back_to_bilingual_srt(tmp_path):
     recorder.add(0, 1, "原文", "译文")
     out_dir = recorder.save(tmp_path, "srt-only")
     assert out_dir is not None
-    (out_dir / "analysis.ja.json").unlink()
+    (out_dir / "analysis.ja.zh.json").unlink()
 
     loaded = load_session_document(out_dir)
     assert len(loaded) == 1
@@ -122,7 +122,7 @@ def test_old_analysis_json_without_translation_fields_loads(tmp_path):
     doc = SessionDocument(language_profile="ja", source_lang="ja", target_lang="zh")
     doc.add(0.0, 1.0, "有译文", "一")
     doc.add(1.5, 2.5, "无译文", None)
-    path = tmp_path / "analysis.ja.json"
+    path = tmp_path / "analysis.ja.zh.json"
     write_analysis_json(
         doc.segments, path, language_profile="ja", source_lang="ja", target_lang="zh"
     )

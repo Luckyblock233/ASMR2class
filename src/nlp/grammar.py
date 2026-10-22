@@ -151,7 +151,12 @@ class GrammarAnalyzer:
         """单次分析尝试；成功回写并返回 True，provider 为 None 时抛契约错误。"""
         if provider is None:
             raise GrammarContractError("语法槽未绑定或 Provider 不可用")
-        template = self.prompts.resolve(self.profile.prompt_path("grammar"), "grammar")
+        template = self.prompts.resolve_pair(
+            "grammar",
+            self.profile.prompt_path("grammar"),
+            self.profile.source_lang,
+            self.profile.target_lang,
+        )
         prompt = self.prompts.render(
             template,
             source_lang=self.profile.source_lang,

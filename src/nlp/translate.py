@@ -116,7 +116,12 @@ class Translator:
         self._sentence_id = 0
 
         # FR-C4.1：检测模板实际声明的变量，缺失的机制自动停用（JSON 与 instTrans 两套模板分别检测）
-        self._tpl_json = self.prompts.resolve(self.profile.prompt_path("translate"), "translate")
+        self._tpl_json = self.prompts.resolve_pair(
+            "translate",
+            self.profile.prompt_path("translate"),
+            self.profile.source_lang,
+            self.profile.target_lang,
+        )
         self._flags_json = self._mechanism_flags(self._tpl_json)
         # instTrans 模板惰性解析：仅在 Provider 声明 glossary_constraint 时需要
         self._tpl_insttrans = None
@@ -125,8 +130,11 @@ class Translator:
     def _insttrans_template(self):
         """解析 instTrans 模板（含变量检测），缓存结果；模板缺失抛 PromptTemplateError。"""
         if self._tpl_insttrans is None:
-            self._tpl_insttrans = self.prompts.resolve(
-                self.profile.prompt_path("translate_insttrans"), "translate_insttrans"
+            self._tpl_insttrans = self.prompts.resolve_pair(
+                "translate_insttrans",
+                self.profile.prompt_path("translate_insttrans"),
+                self.profile.source_lang,
+                self.profile.target_lang,
             )
             self._flags_insttrans = self._mechanism_flags(self._tpl_insttrans)
         flags = self._flags_insttrans

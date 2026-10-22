@@ -194,8 +194,13 @@ class AppearanceSpec:
             f" color: {t.source_color}; selection-background-color: {t.current_bg}; }}"
             f"#centralHost QProgressBar {{ color: {t.meta_color}; background: transparent;"
             f" border: 1px solid {t.separator}; border-radius: 3px;"
-            " font-size: 9px; text-align: center; }}"
+            " text-align: center; }"  # 不写 font-size：Windows 上 QSS px 字号会触发 QFont::setPointSize(-1) 告警
             f"#centralHost QProgressBar::chunk {{ background: {t.status_ok}; border-radius: 2px; }}"
+            # 句块右键菜单等弹窗（QMenu 是 centralHost 的后代，继承其样式表）
+            f"#centralHost QMenu {{ background: {t.background_color};"
+            f" color: {t.source_color}; border: 1px solid {t.separator}; }}"
+            f"#centralHost QMenu::item:selected {{ background: {t.hover_bg}; }}"
+            f"#centralHost QMenu::item:disabled {{ color: {t.meta_color}; }}"
         )
 
     @property

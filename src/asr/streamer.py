@@ -33,7 +33,7 @@ class ASRStreamer:
     ):
         self.engine = engine
         self.seg_cfg = seg_cfg
-        self.language_hint = language_hint
+        self._language_hint = language_hint
         self.on_sentence = on_sentence or (lambda s: None)
         self._stop = threading.Event()
         self._paused = threading.Event()  # 置位 = 暂停：丢弃积压，不产出新句
@@ -41,6 +41,30 @@ class ASRStreamer:
         self._vad_fn = vad_fn
         # 运行时指标采集（telemetry.RuntimeMetrics，可选）：只写快照，不触碰 UI
         self._metrics = metrics
+        self._processor: SegmentProcessor | None = None
+
+    @property
+    def language_hint(self) -> str | None:
+        return self._language_hint
+
+    @language_hint.setter
+    def language_hint(self, value: str | None) -> None:
+        """档案切换时更新 ASR 语种提示；必须同步到正在运行的处理器，
+        否则流式线程仍用旧语种（处理器在 start 时创建，不会自动跟随）。"""
+        self._language_hint = value
+        if self._processor is not None:
+            self._processor.language_hint = value
+
+    def _new_processor(self) -> SegmentProcessor:
+        self._processor = SegmentProcessor(
+            self.engine,
+            self.seg_cfg,
+            language_hint=self._language_hint,
+            on_sentence=self.on_sentence,
+            vad_fn=self._vad_fn,
+            metrics=self._metrics,
+        )
+        return self._processor
 
     # ---- 生命周期 ----
 
@@ -75,28 +99,14 @@ class ASRStreamer:
     # ---- 内部 ----
 
     def _run(self, ring) -> None:
-        processor = SegmentProcessor(
-            self.engine,
-            self.seg_cfg,
-            language_hint=self.language_hint,
-            on_sentence=self.on_sentence,
-            vad_fn=self._vad_fn,
-            metrics=self._metrics,
-        )
+        processor = self._new_processor()
         block = int(SAMPLE_RATE * 0.1)  # 100ms 读取粒度
 
         while not self._stop.is_set() or ring.total_written() - ring.tell() > 0:
             chunk, pos = ring.read(block, timeout=0.2)
             if self._paused.is_set():
                 # 暂停：消费并丢弃积压音频，恢复后从当前位置重新断句
-                processor = SegmentProcessor(
-                    self.engine,
-                    self.seg_cfg,
-                    language_hint=self.language_hint,
-                    on_sentence=self.on_sentence,
-                    vad_fn=self._vad_fn,
-                    metrics=self._metrics,
-                )
+                processor = self._new_processor()
                 continue
             if len(chunk) == 0:
                 if self._stop.is_set():

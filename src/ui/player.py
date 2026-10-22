@@ -162,6 +162,14 @@ def create_replay_window(document, on_seek_highlight=None):
             self.error_label.setText(text)
             log.warning("回放媒体错误：%s", text)
 
+        def closeEvent(self, event) -> None:
+            """关闭媒体窗口必须停止播放（否则音频在后台继续）。"""
+            try:
+                self.player.stop()
+            except Exception:  # noqa: BLE001 —— 播放器异常不得阻塞窗口关闭
+                log.debug("停止播放器失败", exc_info=True)
+            super().closeEvent(event)
+
     return ReplayWindow()
 
 

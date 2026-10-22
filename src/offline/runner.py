@@ -16,6 +16,7 @@ EOF 顺序：解码结束 → ASR flush → Blocker flush → 翻译全部完成
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from pathlib import Path
 
@@ -52,6 +53,8 @@ class OfflineRunner:
         debug=None,
         grammar_enabled: bool = False,
         session_name: str = "",
+        cancel_event: threading.Event | None = None,
+        on_event=None,
     ):
         self.cfg = cfg
         self.profile = profile
@@ -61,6 +64,9 @@ class OfflineRunner:
         self.debug = debug
         self.grammar_enabled = grammar_enabled
         self.session_name = session_name
+        # 可取消标志（UI 批处理窗口的「取消」按钮）与进度事件回调
+        self._cancel = cancel_event or threading.Event()
+        self._on_event = on_event or (lambda kind, **kw: None)
         # 可注入 seam：测试用假引擎/假解码器，不依赖真实 whisper/媒体文件
         self._engine = engine
         self._decoder = decoder
@@ -81,18 +87,26 @@ class OfflineRunner:
         failures = 0
         started_all = time.monotonic()
         for index, path in enumerate(inputs, 1):
+            if self._cancel.is_set():
+                return 130
             print(f"\n== [{index}/{total}] {path} ==")
+            self._on_event("file_start", index=index, total=total, path=path)
             try:
-                self.run_file(path)
+                out_dir = self.run_file(path)
             except KeyboardInterrupt:
                 print("\n⚠ 用户取消（Ctrl+C）")
+                self._on_event("cancelled", path=path)
                 return 130
             except Exception as e:  # noqa: BLE001 —— 单文件失败不阻塞后续文件
                 failures += 1
                 print(f"✗ 处理失败：{type(e).__name__}: {e}")
                 log.exception("离线批处理文件失败：%s", path)
+                self._on_event("file_error", path=path, error=str(e))
+                continue
+            self._on_event("file_done", path=path, out_dir=str(out_dir) if out_dir else "")
         elapsed = time.monotonic() - started_all
         print(f"\n批处理完成：{total - failures}/{total} 成功，耗时 {elapsed:.1f}s")
+        self._on_event("all_done", total=total, failures=failures)
         return 1 if failures else 0
 
     def run_file(self, path: str) -> Path | None:
@@ -156,6 +170,7 @@ class OfflineRunner:
             else:
                 segment_id = recorder.add(s.start, s.end, s.text, None, asr_ms=s.asr_ms)
             s.segment_id = segment_id
+            self._on_event("sentence", count=sentence_count[0], text=s.text)
             if blocker is not None:
                 blocker.feed(s)
 
@@ -181,6 +196,7 @@ class OfflineRunner:
                 if grammar is not None and grammar.available:
                     grammar.submit(s.segment_id)
             print(f"  已翻译 {sentence_count[0]} 句（最近块 {block_ms:.0f}ms）", flush=True)
+            self._on_event("block_done", count=sentence_count[0], block_ms=block_ms)
 
         blocker = (
             Blocker(offline_block_cfg, on_block, autoflush=False)
@@ -200,6 +216,9 @@ class OfflineRunner:
         cancelled = False
         try:
             for chunk in self._decoder(path):
+                if self._cancel.is_set():
+                    cancelled = True
+                    break
                 processor.feed(chunk, start_sample=position)
                 position += len(chunk)
         except KeyboardInterrupt:

@@ -40,6 +40,7 @@ def _profile(slots=None):
         name="test",
         display_name="测试语言",
         source_lang="ja",
+        target_lang="zh",
         slots=slots or {},
     )
 
@@ -381,7 +382,7 @@ def test_b_c_bars_are_multiline(qapp, tmp_path):
     w.show()
     qapp.processEvents()
     assert isinstance(w.barB.layout(), QVBoxLayout)
-    assert w.barB.layout().count() == 3  # 档案行 + 翻译槽行 + 语法槽行
+    assert w.barB.layout().count() == 4  # 源语言行 + 目标语言行 + 翻译槽行 + 语法槽行
     assert isinstance(w.barC.layout(), QVBoxLayout)
     assert w.barC.layout().count() == 3  # RMS/VAD 进度条行 + 监控行 + 服务状态行
     w.close()
@@ -418,24 +419,25 @@ def test_profile_combo_switch_flow(qapp, tmp_path):
     ja = get_profile(PROJECT_ROOT / "config" / "languages", "ja")
     en = get_profile(PROJECT_ROOT / "config" / "languages", "en")
     controller = _make_controller(tmp_path, [_cloud("p")], profile=ja)
-    w = create_overlay(profile=ja, controller=controller, profiles=[ja, en])
+    zh = get_profile(PROJECT_ROOT / "config" / "languages", "zh")
+    w = create_overlay(profile=ja, controller=controller, profiles=[ja, en, zh])
     w.show()
     w.upsert_segment.emit(__import__("src.subtitle.document", fromlist=["Segment"]).Segment(0, 1, "旧句", "旧译", id=1))
     qapp.processEvents()
 
     requests = []
-    w.profile_change_requested.connect(requests.append)
-    index = w.profile_combo.findData("en")
-    w.profile_combo.setCurrentIndex(index)
-    w.profile_combo.activated.emit(index)
-    assert requests == ["en"]
-    assert not w.profile_combo.isEnabled()  # 切换期间禁点
+    w.pair_change_requested.connect(lambda s, t: requests.append((s, t)))
+    index = w.src_combo.findData("en")
+    w.src_combo.setCurrentIndex(index)
+    w.src_combo.activated.emit(index)
+    assert requests == [("en", "zh")]
+    assert not w.src_combo.isEnabled()  # 切换期间禁点
 
     # 切换完成：视图清空、系统提示、槽位刷新、下拉恢复
     w.apply_profile(en, notice="已切换语言档案：英语")
     qapp.processEvents()
-    assert w.profile_combo.isEnabled()
-    assert w.profile_combo.currentData() == "en"
+    assert w.src_combo.isEnabled()
+    assert w.src_combo.currentData() == "en"
     assert not w.subtitle_view._blocks
     system_texts = [
         w.subtitle_view._layout.itemAt(i).widget().text()
@@ -456,13 +458,13 @@ def test_profile_switch_error_restores_combo(qapp, tmp_path):
     controller = _make_controller(tmp_path, [_cloud("p")], profile=ja)
     w = create_overlay(profile=ja, controller=controller, profiles=[ja, en])
     w.show()
-    index = w.profile_combo.findData("en")
-    w.profile_combo.setCurrentIndex(index)
-    w.profile_combo.activated.emit(index)
-    w.notify_profile_error("en", "档案不存在")
+    index = w.src_combo.findData("en")
+    w.src_combo.setCurrentIndex(index)
+    w.src_combo.activated.emit(index)
+    w.notify_profile_error("en→zh", "语言包不存在")
     qapp.processEvents()
-    assert w.profile_combo.isEnabled()
-    assert w.profile_combo.currentData() == "ja"  # 回退到当前档案
+    assert w.src_combo.isEnabled()
+    assert w.src_combo.currentData() == "ja"  # 回退到当前档案
     w.close()
 
 
@@ -539,4 +541,33 @@ def test_theme_switch_recolors_all_bar_widgets(qapp, tmp_path):
     # 句块元信息/分隔线也随主题（C 栏 meta 色、句块分隔线）
     assert "#666666" in w.subtitle_view._appearance.block_stylesheet \
         or "rgba(0, 0, 0" in w.subtitle_view._appearance.block_stylesheet
+    w.close()
+
+
+def test_context_menu_themed(qapp):
+    """句块右键菜单（QMenu）随主题着色：不再是默认黑字。"""
+    from PyQt6.QtWidgets import QMenu
+
+    from src.subtitle.document import Segment
+
+    w = create_overlay()
+    w.show()
+    w.upsert_segment.emit(Segment(0, 1, "原文", "译文", id=1))
+    qapp.processEvents()
+
+    # 深色主题：菜单白字深底
+    css = w.central.styleSheet()
+    assert "#centralHost QMenu" in css and "#FFFFFF" in css
+
+    # 白天主题：菜单黑字浅底
+    w.apply_appearance(UIConfig(theme="light"))
+    qapp.processEvents()
+    css = w.central.styleSheet()
+    assert "#centralHost QMenu" in css and "#1A1A1A" in css
+    # 句块右键菜单是 centralHost 后代，继承该样式表
+    block = w.subtitle_view._blocks[1]
+    menu = QMenu(block)
+    assert menu.styleSheet() == ""  # 无需自设：继承自 centralHost
+    assert w.central.styleSheet() is css or "#centralHost QMenu" in w.central.styleSheet()
+    menu.deleteLater()
     w.close()

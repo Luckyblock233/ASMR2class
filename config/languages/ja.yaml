@@ -1,4 +1,7 @@
-# config/languages/ja.yaml —— 日语学习档案
+# config/languages/ja.yaml —— 日语语言包
+# 语言包提供：ASR 语种提示、默认目标语言（language_pair.target）、语法 prompt/语法卡、
+# 档案级槽位覆盖。运行时可在启动器/B 栏自由选择 源语言（含自动识别）× 目标语言，
+# language_pair.target 只是默认目标，可在 B 栏随时改。
 language: ja
 display_name: 日语
 language_pair:

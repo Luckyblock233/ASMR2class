@@ -110,3 +110,39 @@ def test_silence_only_produces_nothing():
     sentences, engine = run_streamer(audio, seg)
     assert sentences == []
     assert engine.calls == []
+
+
+def test_language_hint_switch_mid_stream():
+    """回归：档案切换更新 language_hint 必须同步到正在运行的断句处理器
+    （否则切换后仍按旧语种识别）。"""
+    audio = make_audio([("silence", 0.5), ("speech", 1.5), ("silence", 1.0),
+                        ("speech", 1.5), ("silence", 1.0)])
+    seg = SegmentationConfig(silence_ms=500, max_segment_sec=15)
+    ring = RingBuffer(SAMPLE_RATE * 60)
+    engine = FakeEngine()
+    sentences: list[Sentence] = []
+    streamer = ASRStreamer(
+        engine, seg, language_hint="ja", on_sentence=lambda s: sentences.append(s)
+    )
+    streamer._vad_fn = energy_vad
+
+    block = 480
+    half = len(audio) // 2
+    streamer.start(ring)
+    for i in range(0, half, block):
+        ring.write(audio[i : i + block])
+        time.sleep(0.001)
+    # 等第一句产出后切换语种
+    deadline = time.monotonic() + 10
+    while not sentences and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert sentences, "第一句未产出"
+    streamer.language_hint = "en"  # 档案切换（rollover 走的就是这个 setter）
+    for i in range(half, len(audio), block):
+        ring.write(audio[i : i + block])
+        time.sleep(0.001)
+    streamer.stop()
+
+    assert len(sentences) == 2
+    assert engine.calls[0][1] == "ja"   # 切换前
+    assert engine.calls[1][1] == "en"   # 切换后

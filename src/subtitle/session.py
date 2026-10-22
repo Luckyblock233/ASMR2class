@@ -70,20 +70,26 @@ class SessionRecorder:
     def save(
         self,
         output_root: Path,
-        session_name: str,
+        session_name: str = "",
         memory: RollingMemory | None = None,
     ) -> Path | None:
-        """保存全部会话文件，返回输出目录；无内容时不产生目录。"""
+        """保存全部会话文件，返回输出目录；无内容时不产生目录。
+
+        session_name 为空时默认用当前语言对（<源>-<目标>，如 ja-zh；auto 源为 auto-zh）。
+        """
         entries = self.entries
         if not entries:
             return None
+        if not session_name:
+            session_name = f"{self.profile.source_lang}-{self.profile.target_lang}"
         out_dir = make_session_dir(output_root, session_name)
         write_txt(entries, out_dir / "transcript.txt")
         write_srt(entries, out_dir / "original.srt", bilingual=False)
         write_srt(entries, out_dir / "bilingual.srt", bilingual=True)
+        # 文件名标注源语言与目标语言；源语言自动识别时为 analysis.auto.<tgt>.json
         write_analysis_json(
             entries,
-            out_dir / f"analysis.{self.profile.source_lang}.json",
+            out_dir / f"analysis.{self.profile.source_lang}.{self.profile.target_lang}.json",
             language_profile=self.profile.name,
             source_lang=self.profile.source_lang,
             target_lang=self.profile.target_lang,

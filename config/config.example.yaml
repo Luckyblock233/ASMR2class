@@ -121,7 +121,10 @@ context:
 
 # ---- 会话 ----
 session:
-  default_profile: ja # 默认语言档案（config/languages/<name>.yaml）
+  # 默认语言包（config/languages/<name>.yaml）：决定默认的源语言与目标语言。
+  # 运行中可在启动器或悬浮窗 B 栏自由选择 源语言（含自动识别）× 目标语言；
+  # 语言对定制模板放 config/prompts/<源>-<目标>/translate.txt（可选）。
+  default_profile: ja
 
 # ---- 界面（M2 悬浮窗 / M3 完整 A-D 悬浮窗）----
 # 外观个性化收敛为两项：主题（dark/light 预定义配色）+ 背景不透明度。

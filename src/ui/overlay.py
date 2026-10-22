@@ -147,7 +147,7 @@ def make_overlay_window_class():
         pause_toggled = pyqtSignal(bool)      # A 栏 运行/暂停（True = 已暂停）
         seek_requested = pyqtSignal(int)      # 回放句块 seek
         grammar_requested = pyqtSignal(int)   # 回放双击语法卡
-        profile_change_requested = pyqtSignal(str)  # B 栏档案切换请求
+        pair_change_requested = pyqtSignal(str, str)  # B 栏语言对切换（源, 目标；源可为 auto）
         _op_done = pyqtSignal(object)         # worker → GUI 回调
 
         def __init__(
@@ -284,32 +284,54 @@ def make_overlay_window_class():
             bar.addWidget(self.btn_settings)
             bar.addWidget(self.btn_close)
 
-            # ---- B 栏：档案与槽位（每项信息独立一行）----
+            # ---- B 栏：语言对与槽位（每项信息独立一行）----
             self.barB = QWidget(self)
             self.barB.setObjectName("barB")
             self.barB.setStyleSheet("QWidget#barB { background: transparent; }")
             bar_b = QVBoxLayout(self.barB)
             bar_b.setContentsMargins(2, 0, 2, 0)
             bar_b.setSpacing(2)
-            profile_row = QHBoxLayout()
-            profile_row.setContentsMargins(0, 0, 0, 0)
-            profile_label_title = QLabel(tr("overlay.profile"), self.barB)
-            profile_label_title.setFixedWidth(64)
-            profile_row.addWidget(profile_label_title)
-            self.profile_combo = QComboBox(self.barB)
-            self.profile_combo.setObjectName("profileCombo")
-            self.profile_combo.setMinimumWidth(160)
+            from ..profiles.loader import AUTO_LANG
+
             self._profiles = list(profiles or [])
+            # 源语言：自动识别 + 各语言包；目标语言：各语言包
+            src_row = QHBoxLayout()
+            src_row.setContentsMargins(0, 0, 0, 0)
+            src_label = QLabel(tr("overlay.source_lang"), self.barB)
+            src_label.setFixedWidth(64)
+            src_row.addWidget(src_label)
+            self.src_combo = QComboBox(self.barB)
+            self.src_combo.setObjectName("srcCombo")
+            self.src_combo.setMinimumWidth(160)
+            self.src_combo.addItem(tr("overlay.lang.auto"), AUTO_LANG)
             for p in self._profiles:
-                self.profile_combo.addItem(p.display_name, p.name)
+                self.src_combo.addItem(p.display_name, p.language)
+            src_row.addWidget(self.src_combo, 1)
+            bar_b.addLayout(src_row)
+
+            tgt_row = QHBoxLayout()
+            tgt_row.setContentsMargins(0, 0, 0, 0)
+            tgt_label = QLabel(tr("overlay.target_lang"), self.barB)
+            tgt_label.setFixedWidth(64)
+            tgt_row.addWidget(tgt_label)
+            self.tgt_combo = QComboBox(self.barB)
+            self.tgt_combo.setObjectName("tgtCombo")
+            self.tgt_combo.setMinimumWidth(160)
+            for p in self._profiles:
+                self.tgt_combo.addItem(p.display_name, p.language)
+            tgt_row.addWidget(self.tgt_combo, 1)
+            bar_b.addLayout(tgt_row)
+
             if profile is not None:
-                idx = self.profile_combo.findData(profile.name)
-                if idx >= 0:
-                    self.profile_combo.setCurrentIndex(idx)
-            self.profile_combo.activated.connect(self._on_profile_combo)
-            self.profile_combo.setEnabled(bool(self._profiles))
-            profile_row.addWidget(self.profile_combo, 1)
-            bar_b.addLayout(profile_row)
+                idx = self.src_combo.findData(profile.source_lang)
+                self.src_combo.setCurrentIndex(max(0, idx))
+                idx = self.tgt_combo.findData(profile.target_lang)
+                self.tgt_combo.setCurrentIndex(max(0, idx))
+            self.src_combo.activated.connect(self._on_pair_combo)
+            self.tgt_combo.activated.connect(self._on_pair_combo)
+            enabled = bool(self._profiles) and not replay_mode
+            self.src_combo.setEnabled(enabled)
+            self.tgt_combo.setEnabled(enabled)
             self.slot_combos: dict = {}
             if self.controller is not None:
                 from ..nlp.providers import SLOT_GRAMMAR, SLOT_NAMES, SLOT_TRANSLATION
@@ -525,25 +547,36 @@ def make_overlay_window_class():
             self.barB.setVisible(not on and self._ui.show_bar_b)
             self.barC.setVisible(not on and self._ui.show_bar_c)
 
-        # ==================== 档案切换（§4.2 会话滚动）====================
+        # ==================== 语言对切换（§4.2 会话滚动）====================
 
-        def _on_profile_combo(self, _index: int) -> None:
-            name = self.profile_combo.currentData()
-            if not name or (self.profile is not None and name == self.profile.name):
+        def _on_pair_combo(self, _index: int) -> None:
+            source = self.src_combo.currentData()
+            target = self.tgt_combo.currentData()
+            if (
+                not source
+                or not target
+                or (
+                    self.profile is not None
+                    and source == self.profile.source_lang
+                    and target == self.profile.target_lang
+                )
+            ):
                 return
             # 切换期间禁点，防止并发滚动；完成后由 apply_profile/notify_profile_error 恢复
-            self.profile_combo.setEnabled(False)
-            self.profile_change_requested.emit(name)
+            self.src_combo.setEnabled(False)
+            self.tgt_combo.setEnabled(False)
+            self.pair_change_requested.emit(source, target)
 
         def apply_profile(self, profile, merged_ui: UIConfig | None = None, notice: str = "") -> None:
             """切换完成后的 GUI 侧更新：新档案、新视图、系统提示行、槽位刷新。"""
             self.profile = profile
-            index = self.profile_combo.findData(profile.name)
-            if index >= 0:
-                self.profile_combo.blockSignals(True)
-                self.profile_combo.setCurrentIndex(index)
-                self.profile_combo.blockSignals(False)
-            self.profile_combo.setEnabled(True)
+            for combo, lang in ((self.src_combo, profile.source_lang),
+                                (self.tgt_combo, profile.target_lang)):
+                index = combo.findData(lang)
+                combo.blockSignals(True)
+                combo.setCurrentIndex(max(0, index))
+                combo.blockSignals(False)
+                combo.setEnabled(True)
             if merged_ui is not None:
                 self.apply_appearance(merged_ui, resize=False)
             self.subtitle_view.source_lang = profile.source_lang
@@ -557,15 +590,18 @@ def make_overlay_window_class():
                 self.controller.set_profile(profile)
                 self.refresh_slots()
 
-        def notify_profile_error(self, name: str, error: str) -> None:
+        def notify_profile_error(self, _what: str, error: str) -> None:
             """切换失败：恢复下拉状态并提示，不改变当前会话。"""
             if self.profile is not None:
-                index = self.profile_combo.findData(self.profile.name)
-                if index >= 0:
-                    self.profile_combo.blockSignals(True)
-                    self.profile_combo.setCurrentIndex(index)
-                    self.profile_combo.blockSignals(False)
-            self.profile_combo.setEnabled(True)
+                for combo, lang in ((self.src_combo, self.profile.source_lang),
+                                    (self.tgt_combo, self.profile.target_lang)):
+                    index = combo.findData(lang)
+                    if index >= 0:
+                        combo.blockSignals(True)
+                        combo.setCurrentIndex(index)
+                        combo.blockSignals(False)
+            self.src_combo.setEnabled(True)
+            self.tgt_combo.setEnabled(True)
             self.tray.showMessage(
                 "ASR2class",
                 tr("overlay.profile_switch_failed") + f"：{error}",

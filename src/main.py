@@ -900,6 +900,9 @@ def run_batch_window(args: argparse.Namespace, files: list[str]) -> int:
 
     set_language(cfg.ui.ui_language, cfg.root / "config" / "locales")
     app = QApplication.instance() or QApplication(sys.argv)
+    from .ui.overlay import fix_app_font
+
+    fix_app_font(app)
     app.setQuitOnLastWindowClosed(True)  # 批处理窗口关闭即结束
 
     window = create_batch_shell(files)
@@ -951,6 +954,9 @@ def run_launcher(args: argparse.Namespace) -> int:
 
     set_language(cfg.ui.ui_language, cfg.root / "config" / "locales")
     app = QApplication.instance() or QApplication(sys.argv)
+    from .ui.overlay import fix_app_font
+
+    fix_app_font(app)
     profiles = list(load_profiles(cfg.languages_dir).values())
     launcher = create_launcher(
         profiles, default_profile=args.profile or cfg.default_profile,

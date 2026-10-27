@@ -79,6 +79,19 @@ class OverlayUnavailableError(RuntimeError):
     pass
 
 
+def fix_app_font(app) -> None:
+    """Windows + QSS px 字号的已知告警（QFont::setPointSize(-1)）防御。
+
+    默认应用字体若只有 pixelSize（pointSize=-1），样式表引擎换算时会告警。
+    给一个带有效 pointSize 的默认字体即可消除；对显示效果无影响。
+    """
+    font = app.font()
+    if font.pointSize() <= 0:
+        from PyQt6.QtGui import QFont
+
+        app.setFont(QFont(font.family(), 9))
+
+
 def _import_qt():
     try:
         from PyQt6.QtCore import Qt, QTimer, pyqtSignal
@@ -951,7 +964,9 @@ def create_overlay(
     if QApplication.instance() is None:
         _APP_REF = QApplication(_sys.argv)
     # 托盘常驻应用：窗口（设置页/悬浮窗）关闭不意味着退出，退出只能走托盘/关闭按钮
-    QApplication.instance().setQuitOnLastWindowClosed(False)
+    app = QApplication.instance()
+    app.setQuitOnLastWindowClosed(False)
+    fix_app_font(app)
 
     if _OVERLAY_CLASS is None:
         _OVERLAY_CLASS = make_overlay_window_class()

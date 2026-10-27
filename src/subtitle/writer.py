@@ -77,6 +77,7 @@ def write_analysis_json(
                 "translation_error": e.translation_error,
                 "asr_ms": e.asr_ms,
                 "translate_ms": e.translate_ms,
+                "analysis_seq": e.analysis_seq,
                 **e.analysis_payload(),
             }
             for index, e in enumerate(entries, 1)

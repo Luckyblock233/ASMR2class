@@ -21,9 +21,39 @@ from .translate import _extract_json
 
 log = logging.getLogger(__name__)
 
+# 分析阶段（驱动句块进度条 tooltip）
+STAGE_QUEUED = "queued"
+STAGE_RENDERING = "rendering"
+STAGE_REQUESTING = "requesting"
+STAGE_PARSING = "parsing"
+
 
 class GrammarContractError(ValueError):
     """语法 Provider 返回值不符合通用 JSON 契约。"""
+
+
+def classify_grammar_error(e: BaseException) -> str:
+    """语法分析失败分类：解析错误 / 模板错误 / 契约错误 / 模型调用错误 / 内部错误。"""
+    import json as _json
+
+    from .prompt_engine import PromptTemplateError
+
+    if isinstance(e, _json.JSONDecodeError):
+        return "模型输出解析错误（非合法 JSON）"
+    if isinstance(e, GrammarContractError):
+        return "模型输出契约错误"
+    if isinstance(e, PromptTemplateError):
+        return "模板错误"
+    try:
+        from openai import APIConnectionError, APIStatusError, APITimeoutError
+
+        if isinstance(e, (APIConnectionError, APITimeoutError)):
+            return "模型调用错误（网络/超时）"
+        if isinstance(e, APIStatusError):
+            return f"模型调用错误（HTTP {e.status_code}）"
+    except ImportError:
+        pass
+    return "内部错误"
 
 
 def validate_analysis_payload(value: Any) -> dict[str, Any]:
@@ -43,6 +73,9 @@ def validate_analysis_payload(value: Any) -> dict[str, Any]:
         raise GrammarContractError("grammar_points 必须是数组")
     if not isinstance(vocabulary, list):
         raise GrammarContractError("vocabulary 必须是数组")
+    # 模型偶尔把 extra 输出为字符串：包装为对象而不是整句判失败
+    if isinstance(extra, str):
+        extra = {"note": extra}
     if not isinstance(extra, dict):
         raise GrammarContractError("extra 必须是对象")
     return {
@@ -67,11 +100,13 @@ class GrammarAnalyzer:
         max_workers: int = 2,
         max_pending: int = 64,
         lease=None,
+        debug=None,
     ):
         self._get_provider = provider_getter if callable(provider_getter) else lambda: provider_getter
         # 可选零参 callable → ContextManager[Provider|None]（ModelSlots.grammar_lease）；
         # 每次 attempt 重新取租约：换绑后重试自动使用新绑定
         self._lease = lease
+        self._debug = debug  # --debug：接收格式化语法交涉文本
         self.prompts = prompts
         self.profile = profile
         self.document = document
@@ -107,7 +142,9 @@ class GrammarAnalyzer:
                 self._notify(snapshot)
                 return False
             self._pending.add(segment_id)
-            snapshot = self.document.set_analysis_state(segment_id, ANALYSIS_PENDING)
+            snapshot = self.document.set_analysis_state(
+                segment_id, ANALYSIS_PENDING, stage=STAGE_QUEUED
+            )
             self._notify(snapshot)
             try:
                 future = self._executor.submit(self._run, segment_id)
@@ -123,34 +160,67 @@ class GrammarAnalyzer:
             future.add_done_callback(lambda f, sid=segment_id: self._complete(sid, f))
         return True
 
+    def _set_stage(self, segment_id: int, stage: str) -> None:
+        """更新分析阶段（驱动句块进度条 tooltip）。"""
+        try:
+            snapshot = self.document.set_analysis_state(segment_id, ANALYSIS_PENDING, stage=stage)
+            self._notify(snapshot)
+        except KeyError:
+            pass
+
     def _run(self, segment_id: int) -> None:
+        from .debug import GrammarAttempt
+
         segment = self.document.get(segment_id)
         if segment is None:
             return
+        attempts: list[GrammarAttempt] = []
         last_error: Exception | None = None
+        last_error_text = ""
         for attempt in range(2):
+            att = GrammarAttempt(attempt_no=attempt + 1)
+            attempts.append(att)
             try:
                 if self._lease is not None:
                     with self._lease() as provider:
-                        if self._attempt(segment_id, segment, provider):
+                        if self._attempt(segment_id, segment, provider, att):
+                            self._debug_output(segment_id, segment.source, attempts)
                             return
                 else:
-                    if self._attempt(segment_id, segment, self._get_provider()):
+                    if self._attempt(segment_id, segment, self._get_provider(), att):
+                        self._debug_output(segment_id, segment.source, attempts)
                         return
             except Exception as e:  # 单句失败不得影响其他句或主字幕流
                 last_error = e
-                log.info("语法分析失败（句 %s，第 %s 次）：%s", segment_id, attempt + 1, e)
+                category = classify_grammar_error(e)
+                att.error = f"{category}：{type(e).__name__}: {e}"
+                last_error_text = att.error
+                log.info("语法分析失败（句 %s，第 %s 次）：%s", segment_id, attempt + 1, att.error)
+        self._debug_output(segment_id, segment.source, attempts)
         snapshot = self.document.set_analysis_state(
             segment_id,
             ANALYSIS_FAILED,
-            f"{type(last_error).__name__}: {last_error}" if last_error else "语法分析失败",
+            last_error_text or (
+                f"{type(last_error).__name__}: {last_error}" if last_error else "语法分析失败"
+            ),
         )
         self._notify(snapshot)
 
-    def _attempt(self, segment_id: int, segment: Segment, provider) -> bool:
+    def _debug_output(self, segment_id: int, source: str, attempts) -> None:
+        if self._debug is None:
+            return
+        from .debug import format_grammar_exchange
+
+        try:
+            self._debug(format_grammar_exchange(segment_id, source, attempts))
+        except Exception:  # noqa: BLE001 —— 调试输出不得破坏分析 worker
+            log.debug("语法调试输出异常", exc_info=True)
+
+    def _attempt(self, segment_id: int, segment: Segment, provider, att) -> bool:
         """单次分析尝试；成功回写并返回 True，provider 为 None 时抛契约错误。"""
         if provider is None:
             raise GrammarContractError("语法槽未绑定或 Provider 不可用")
+        self._set_stage(segment_id, STAGE_RENDERING)
         template = self.prompts.resolve_pair(
             "grammar",
             self.profile.prompt_path("grammar"),
@@ -166,7 +236,11 @@ class GrammarAnalyzer:
             translation=segment.translation or "",
             level_hint=str(self.profile.raw.get("level_hint") or ""),
         )
+        att.prompt = prompt
+        self._set_stage(segment_id, STAGE_REQUESTING)
         response = provider.chat(prompt, json_mode=True)
+        att.response = response
+        self._set_stage(segment_id, STAGE_PARSING)
         payload = validate_analysis_payload(_extract_json(response.content))
         cfg = getattr(provider, "cfg", None)
         self.document.update_grammar_metadata(

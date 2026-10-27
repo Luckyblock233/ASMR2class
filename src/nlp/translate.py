@@ -54,17 +54,28 @@ def estimate_tokens(text: str) -> int:
 
 
 def _extract_json(content: str) -> dict:
-    """从响应中提取 JSON 对象（容忍 ```json 围栏与前后杂散文本）。"""
+    """从响应中提取 JSON 对象。
+
+    容忍：```json 围栏、前导/尾随杂散文本（raw_decode 只解析首个完整 JSON 值，
+    模型在合法 JSON 后多输出内容的 "Extra data" 场景）、以及尾随内容含花括号
+    时的贪婪匹配兜底。
+    """
     content = content.strip()
+    fenced = re.search(r"```(?:json)?\s*(.*?)```", content, re.DOTALL)
+    candidate = fenced.group(1).strip() if fenced else content
+    start = candidate.find("{")
+    if start < 0:
+        raise json.JSONDecodeError("no JSON object found", content, 0)
     try:
-        return json.loads(content)
+        obj, _end = json.JSONDecoder().raw_decode(candidate[start:])
+        if isinstance(obj, dict):
+            return obj
     except json.JSONDecodeError:
         pass
-    m = re.search(r"```(?:json)?\s*(\{.*\})\s*```", content, re.DOTALL)
-    if not m:
-        m = re.search(r"\{.*\}", content, re.DOTALL)
+    # 兜底：贪婪大括号匹配（首个对象本身不完整、尾随内容含花括号时）
+    m = re.search(r"\{.*\}", candidate, re.DOTALL)
     if m:
-        return json.loads(m.group(1) if m.lastindex else m.group(0))
+        return json.loads(m.group(0))
     raise json.JSONDecodeError("no JSON object found", content, 0)
 
 

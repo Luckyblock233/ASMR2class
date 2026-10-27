@@ -388,3 +388,69 @@ def test_system_message_line(qapp):
     ]
     assert remaining == []  # 系统行随清空移除
     view.close()
+
+
+def test_analysis_progress_bar_stages(qapp):
+    """分析中显示进度条：阶段推进更新进度值，hover 显示当前阶段。"""
+    view = SubtitleView()
+    view.upsert_segment(_segment(1, status=ANALYSIS_PENDING))
+    block = view._blocks[1]
+    assert block.progress.isVisibleTo(block)
+    assert block.progress.value() == 10  # queued
+
+    view.upsert_segment(Segment(
+        id=1, start=0, end=1, source="原文", translation="译文",
+        analysis_status=ANALYSIS_PENDING, analysis_stage="requesting",
+    ))
+    assert block.progress.value() == 65
+    assert "调用模型" in block.progress.toolTip()
+    assert "调用模型" in block.status_label.toolTip()
+
+    # 完成后进度条隐藏
+    view.upsert_segment(Segment(
+        id=1, start=0, end=1, source="原文", translation="译文",
+        analysis_status=ANALYSIS_READY, structure={"x": 1},
+    ))
+    assert not block.progress.isVisibleTo(block)
+    view.close()
+
+
+def test_analysis_failure_tooltip_has_category(qapp):
+    """失败句块 hover 显示分类 + 原因，便于针对性调整。"""
+    view = SubtitleView()
+    view.upsert_segment(Segment(
+        id=1, start=0, end=1, source="原文", translation="译文",
+        analysis_status=ANALYSIS_FAILED,
+        analysis_error="模型调用错误（网络/超时）：APIConnectionError: 超时",
+    ))
+    block = view._blocks[1]
+    assert "模型调用错误" in block.status_label.toolTip()
+    assert "超时" in block.status_label.toolTip()
+    assert "网络" in block.status_label.toolTip()
+    view.close()
+
+
+def test_progress_bar_floats_below_status_text(qapp):
+    """进度条浮动在状态文字正下方：不占布局高度，宽度不超过状态文字。"""
+    view = SubtitleView()
+    view.resize(400, 200)
+    view.upsert_segment(_segment(1, source="原文", status=ANALYSIS_NONE))
+    qapp.processEvents()
+    normal_height = view._blocks[1].height()
+
+    view.upsert_segment(Segment(
+        id=1, start=0, end=1, source="原文", translation="译文",
+        analysis_status=ANALYSIS_PENDING, analysis_stage="requesting",
+    ))
+    qapp.processEvents()
+    block = view._blocks[1]
+    assert block.height() == normal_height  # 不占布局高度
+    geo = block.progress.geometry()
+    assert geo.width() <= block.status_label.sizeHint().width() + 1  # 不超文字长度
+    assert geo.y() <= block.status_label.sizeHint().height() + 8     # 在状态文字正下方
+    # 命中面：仅状态文字与进度条带提示；其他位置不设 tooltip（避免空黑框）
+    assert "调用模型" in block.status_label.toolTip()
+    assert "调用模型" in block.progress.toolTip()
+    assert block.meta_label.toolTip() == ""
+    assert block.toolTip() == ""
+    view.close()

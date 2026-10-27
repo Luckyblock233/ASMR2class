@@ -25,6 +25,7 @@ def run_session_preview(
     from PyQt6.QtWidgets import QApplication, QFileDialog
 
     from .i18n import tr
+    from .notebook import create_notebook_window
     from .overlay import create_overlay
     from .player import create_replay_window
 
@@ -35,6 +36,7 @@ def run_session_preview(
         read_only=True,
         replay_mode=True,
         ui=ui,
+        notebook_factory=lambda: create_notebook_window(lambda: document, lambda: profile),
     )
     for segment in document.segments:
         overlay.upsert_segment.emit(segment)

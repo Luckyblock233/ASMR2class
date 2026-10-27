@@ -47,7 +47,7 @@ uv run python -m src.main --replay-session output/<日期>-<会话名>          
 uv run python -m src.main --replay-session output/<日期>-<会话名> --media a.mp4  # 会话 + 音视频同步回放
 uv run python -m src.main --srt a.srt --media a.mp4                        # 外部 SRT（保留多行）+ 媒体回放
 uv run python -m src.main --batch a.mp4 b.mkv                              # 真正的离线批处理（PyAV 解码，非实时模拟）
-uv run python -m src.main --debug                # 完整输出每次 LLM 请求/响应（prompt 全文、原始响应、token 用量、降级链）
+uv run python -m src.main --debug                # 完整输出每次 LLM 请求/响应（翻译块与语法分析的 prompt 全文、原始响应、token 用量、降级链）
 uv run python -m src.main --auto-lang            # ASR 自动检测语种
 uv run python -m src.main --no-overlay           # 禁用悬浮窗（纯控制台）
 uv run python -m src.main --list-providers       # 列出全部 Provider 与槽位绑定状态
@@ -140,6 +140,7 @@ slots:
 - 语法槽绑定具有 `grammar` 能力的 Provider 后，`--grammar` 会对新句自动排队分析；不加该参数时不会自动产生语法 API 请求，但可在句块右键选择“为此句生成语法分析”。
 - 分析在后台执行，按稳定句段 ID 回写，乱序完成不会改变字幕顺序。未绑定、超时或 JSON 契约失败只影响对应句子的语法状态，不阻断识别和翻译。
 - 有分析数据的句块可点击弹出语法卡（实时模式）。卡片区块、字段、标题和徽章颜色由 `config/languages/<lang>.yaml` 的 `grammar_card.sections` 声明；日语/英语字段只存在 YAML 和 prompt 中。
+- **分析笔记**：A 栏「笔记」按钮打开独立半透明悬浮窗（与主悬浮窗同风格），按识别顺序集中查看已分析句（时间戳+原句+译文，默认折叠）；点击单句弹出同款语法卡；可按识别顺序/分析顺序排序；「导出 Markdown…」把全部分析写成结构化 .md 文件（原子写入），档案未声明的自定义分析字段也会兜底导出。
 - 会话结束时会先停止接收新任务并限期排空，再保存 `analysis.<源语言>.json`。
 
 ## M3 后续：完整悬浮窗 / 设置页 / 回放 / 离线批处理

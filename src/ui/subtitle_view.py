@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMenu,
+    QProgressBar,
     QScrollArea,
     QSizePolicy,
     QToolButton,
@@ -105,6 +106,15 @@ class SentenceBlock(QFrame):
 
         self.status_label = QLabel(self)
         self.status_label.setObjectName("sentenceAnalysisStatus")
+
+        # 语法分析进度条（仅 ANALYSIS_PENDING 时显示）：浮动在状态文字正下方，
+        # 不占用布局高度（不改变句块高度），宽度不超过状态文字。
+        self.progress = QProgressBar(self)
+        self.progress.setObjectName("analysisProgress")
+        self.progress.setRange(0, 100)
+        self.progress.setTextVisible(False)
+        self.progress.setFixedHeight(4)
+        self.progress.setVisible(False)
 
         meta_row = QHBoxLayout()
         meta_row.setContentsMargins(0, 0, 0, 0)
@@ -264,6 +274,14 @@ class SentenceBlock(QFrame):
         for widget in widgets:
             self.text_layout.addWidget(widget)
 
+    # 分析阶段 →（进度值, 阶段说明）；与 grammar.py 的 STAGE_* 对应
+    _STAGE_PROGRESS = {
+        "queued": (10, "排队中"),
+        "rendering": (35, "正在渲染模板"),
+        "requesting": (65, "正在调用模型（发送并等待响应）"),
+        "parsing": (85, "正在解析响应"),
+    }
+
     def _refresh_status(self) -> None:
         parts: list[str] = []
         tooltips: list[str] = []
@@ -277,12 +295,22 @@ class SentenceBlock(QFrame):
         status = self._segment.analysis_status
         if status == ANALYSIS_PENDING:
             parts.append("语法分析中…")
-            tooltips.append("正在生成语法分析")
-        elif status == ANALYSIS_READY:
+            stage = self._segment.analysis_stage
+            value, stage_label = self._STAGE_PROGRESS.get(stage, (10, "排队中"))
+            tooltips.append(f"正在生成语法分析（{stage_label}）")
+            # 进度条 hover 显示当前阶段
+            self.progress.setValue(value)
+            self.progress.setToolTip(f"语法分析：{stage_label}")
+            self.progress.setVisible(True)
+            self._position_progress()
+        else:
+            self.progress.setVisible(False)
+        if status == ANALYSIS_READY:
             parts.append("语法分析可用" if self._segment.has_analysis else "语法分析已完成")
             tooltips.append("单击查看语法分析" if self._segment.has_analysis else "语法分析已完成")
         elif status == ANALYSIS_FAILED:
             parts.append("语法分析失败")
+            # 失败原因（含分类）在 hover 可见，便于针对性调整
             tooltips.append(self._segment.analysis_error or "语法分析失败，可右键重试")
             color = error_color
 
@@ -290,9 +318,25 @@ class SentenceBlock(QFrame):
         tooltip = "；".join(tooltips)
         self.status_label.setText(text)
         self.status_label.setVisible(bool(text))
-        self.status_label.setToolTip(tooltip)
         self.status_label.setStyleSheet(f"color: {color}; background: transparent;")
-        self.setToolTip(tooltip)
+        # tooltip 只挂在状态文字上（进行中的进度条另有自己的阶段提示）；
+        # 其他位置不设 tooltip，避免空 tooltip 黑框
+        self.status_label.setToolTip(tooltip)
+
+    def _position_progress(self) -> None:
+        """进度条浮动在「语法分析中…」状态文字正下方，不占布局高度。"""
+        if not self.progress.isVisibleTo(self):
+            return
+        margins = self._block_layout.contentsMargins()
+        width = max(60, min(self.status_label.sizeHint().width(), 240))
+        width = min(width, self.width() - margins.left() - margins.right())
+        x = self.width() - margins.right() - width
+        y = margins.top() + self.status_label.sizeHint().height() + 1
+        self.progress.setGeometry(x, y, width, 4)
+
+    def resizeEvent(self, event) -> None:
+        self._position_progress()
+        super().resizeEvent(event)
 
     def _refresh_analysis_action(self) -> None:
         status = self._segment.analysis_status

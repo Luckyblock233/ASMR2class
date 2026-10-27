@@ -3,9 +3,9 @@
 # 仅输出 JSON 对象：structure / grammar_points / vocabulary / extra。
 # structure 使用 {type, clauses:[{text, role, note}]}；grammar_points 每项使用
 # {name, explanation, example, hsk}；vocabulary 每项使用
-# {word, reading, pos, meaning, hsk}。没有内容时使用 null、[] 或 {}。
+# {word, reading, pos, meaning, hsk}。没有内容时使用 null、[] 或 {}；extra 必须是对象（字符串等内容放入 extra.note），不允许输出字符串。
 你是一名中文教师，请用{target_lang}讲解下面的中文句子。
-仅输出一个 JSON 对象，顶层字段为 structure、grammar_points、vocabulary、extra，不要输出其他内容。
+仅输出一个 JSON 对象，顶层字段为 structure、grammar_points、vocabulary、extra；不要在 JSON 之后输出任何内容。
 structure 使用 type、clauses 字段，clauses 每项使用 text、role、note；grammar_points 每项使用 name、explanation、example、hsk；vocabulary 每项使用 word、reading、pos、meaning、hsk。
 1. structure.type 标注句型或句式（如把字句、被字句、疑问句、兼语句）；clauses 切分分句并说明成分与句法作用。
 2. grammar_points 聚焦本句最重要的句型、虚词（把/被/了/着/过/得等）、语序或语气，给出简洁讲解、例句和 HSK 等级。

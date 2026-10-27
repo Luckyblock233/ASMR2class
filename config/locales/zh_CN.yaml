@@ -149,3 +149,14 @@ launcher.target_lang: 目标语言
 overlay.source_lang: 源语言
 overlay.target_lang: 目标语言
 overlay.lang.auto: 自动识别
+overlay.notebook: 笔记
+notebook.title: 语法分析笔记
+notebook.refresh: 刷新
+notebook.export: 导出 Markdown…
+notebook.close: 关闭
+notebook.empty: 尚无已分析的句子。实时模式右键句块可生成语法分析。
+notebook.count: 已分析
+notebook.export_done: 已导出：
+notebook.sort: 排序
+notebook.sort.recognition: 识别顺序
+notebook.sort.analysis: 分析顺序

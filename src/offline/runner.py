@@ -149,6 +149,7 @@ class OfflineRunner:
                 self.profile,
                 recorder.document,
                 lease=self.slots.grammar_lease,
+                debug=self.debug,
             )
 
         # 块配置：离线 20 句上限实际生效，禁用墙上时钟 autoflush

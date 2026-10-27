@@ -68,3 +68,45 @@ def format_block_exchange(
             lines.append(f"  {t}  →  (见各次尝试)")
     lines.append("")
     return "\n".join(lines)
+
+
+@dataclass
+class GrammarAttempt:
+    """一次语法分析尝试的记录。"""
+
+    attempt_no: int
+    prompt: str | None = None
+    response: ChatResult | None = None
+    error: str | None = None
+    stage: str = ""
+
+
+def format_grammar_exchange(
+    segment_id: int,
+    sentence: str,
+    attempts: list[GrammarAttempt],
+) -> str:
+    """把一句语法分析的完整交涉过程格式化为可读的调试文本（--debug 模式）。"""
+    lines: list[str] = []
+    bar = "=" * 70
+    lines.append(bar)
+    lines.append(f"语法分析 句段#{segment_id}（尝试 {len(attempts)} 次）")
+    lines.append(f"原文：{sentence}")
+    lines.append(bar)
+    for att in attempts:
+        lines.append(f"\n----- 尝试 {att.attempt_no}/{len(attempts)} -----")
+        if att.prompt is not None:
+            lines.append("[请求 prompt]")
+            lines.append(att.prompt)
+        if att.response is not None:
+            r = att.response
+            lines.append(
+                f"[响应] 耗时 {r.latency_sec:.2f}s，"
+                f"tokens {r.prompt_tokens}+{r.completion_tokens}={r.total_tokens}，"
+                f"第 {r.attempts} 次网络尝试"
+            )
+            lines.append(r.content)
+        if att.error:
+            lines.append(f"[失败] {att.error}")
+    lines.append("")
+    return "\n".join(lines)

@@ -158,3 +158,14 @@ launcher.target_lang: Target language
 overlay.source_lang: Source
 overlay.target_lang: Target
 overlay.lang.auto: Auto-detect
+overlay.notebook: Notes
+notebook.title: Grammar Notes
+notebook.refresh: Refresh
+notebook.export: Export Markdown…
+notebook.close: Close
+notebook.empty: No analyzed sentences yet. In live mode, right-click a sentence to generate analysis.
+notebook.count: Analyzed
+notebook.export_done: "Exported to:"
+notebook.sort: Sort
+notebook.sort.recognition: By recognition
+notebook.sort.analysis: By analysis

@@ -36,6 +36,8 @@ class Segment:
     extra: dict[str, Any] = field(default_factory=dict)
     analysis_status: str = ANALYSIS_NONE
     analysis_error: str = ""
+    analysis_stage: str = ""   # 分析进行中的阶段（queued/rendering/requesting/parsing）
+    analysis_seq: int = 0  # 分析完成顺序号（0 = 未分析/未知；按完成先后递增）
     translation_status: str = TRANSLATION_NONE
     translation_error: str = ""
     asr_ms: float = 0.0        # 该句 ASR 转写耗时（毫秒）
@@ -87,6 +89,7 @@ class SessionDocument:
         self._segments: list[Segment] = []
         self._by_id: dict[int, Segment] = {}
         self._next_id = 1
+        self._analysis_seq = 0  # 分析完成顺序计数器
         self._lock = threading.RLock()
 
     def __len__(self) -> int:
@@ -168,16 +171,20 @@ class SessionDocument:
             if segment.id in self._by_id:
                 raise ValueError(f"字幕句段 ID 重复：{segment.id}")
             self._next_id = max(self._next_id, segment.id + 1)
+            self._analysis_seq = max(self._analysis_seq, segment.analysis_seq)
             if segment.has_analysis:
                 segment.analysis_status = ANALYSIS_READY
             self._segments.append(segment)
             self._by_id[segment.id] = segment
 
-    def set_analysis_state(self, segment_id: int, status: str, error: str = "") -> Segment:
+    def set_analysis_state(
+        self, segment_id: int, status: str, error: str = "", stage: str = ""
+    ) -> Segment:
         with self._lock:
             segment = self._require(segment_id)
             segment.analysis_status = status
             segment.analysis_error = error
+            segment.analysis_stage = stage
             return segment.snapshot()
 
     def apply_analysis(self, segment_id: int, payload: dict[str, Any]) -> Segment:
@@ -189,6 +196,9 @@ class SessionDocument:
             segment.extra = copy.deepcopy(payload.get("extra") or {})
             segment.analysis_status = ANALYSIS_READY
             segment.analysis_error = ""
+            segment.analysis_stage = ""
+            self._analysis_seq += 1
+            segment.analysis_seq = self._analysis_seq
             return segment.snapshot()
 
     def update_grammar_metadata(
@@ -255,6 +265,7 @@ def _document_from_analysis(path: Path) -> SessionDocument:
             translation_error=str(raw.get("translation_error") or ""),
             asr_ms=float(raw.get("asr_ms") or 0.0),
             translate_ms=float(raw.get("translate_ms") or 0.0),
+            analysis_seq=int(raw.get("analysis_seq") or 0),
         )
         doc.add_loaded(segment)
     return doc

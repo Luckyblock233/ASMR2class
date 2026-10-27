@@ -8,9 +8,11 @@ from types import SimpleNamespace
 
 import pytest
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 from src.nlp.grammar import GrammarAnalyzer, GrammarContractError, validate_analysis_payload
 from src.nlp.prompt_engine import PromptEngine
-from src.profiles.loader import LanguageProfile
+from src.profiles.loader import LanguageProfile, get_profile
 from src.subtitle.document import (
     ANALYSIS_FAILED,
     ANALYSIS_PENDING,
@@ -236,3 +238,159 @@ def test_validate_analysis_payload_rejects_wrong_container_types(key, value):
     with pytest.raises(GrammarContractError) as exc_info:
         validate_analysis_payload({key: value})
     assert key in str(exc_info.value)
+
+
+# ==================== 阶段进度 / 错误分类 / --debug ====================
+
+
+def _run_analyzer(provider, debug=None):
+    """跑一次单句分析（同步等待完成），返回 (document, segment_id, debug输出)。"""
+    import json as _json
+
+    from src.nlp.llm_client import ChatResult
+    from src.nlp.prompt_engine import PromptEngine
+    from src.subtitle.document import SessionDocument
+
+    prompts = PromptEngine(PROJECT_ROOT / "config" / "prompts")
+    profile = get_profile(PROJECT_ROOT / "config" / "languages", "ja")
+    doc = SessionDocument(language_profile="ja", source_lang="ja", target_lang="zh")
+    sid = doc.add(0.0, 1.0, "彼は行っています", "他正要去")
+    debug_out = []
+    analyzer = GrammarAnalyzer(
+        provider, prompts, profile, doc,
+        debug=(lambda text: debug_out.append(text)) if debug is not None else None,
+    )
+    analyzer.submit(sid)
+    analyzer.drain()
+    return doc, sid, debug_out
+
+
+def test_grammar_debug_logs_exchange():
+    """--debug：语法分析的 prompt/响应/耗时进入调试输出。"""
+    import json
+
+    from src.nlp.llm_client import ChatResult
+
+    class P:
+        cfg = None
+        online = True
+
+        def chat(self, prompt, **kw):
+            return ChatResult(json.dumps({
+                "structure": {"type": "主谓"}, "grammar_points": [],
+                "vocabulary": [], "extra": {},
+            }, ensure_ascii=False), prompt_tokens=5, completion_tokens=10, latency_sec=0.3)
+
+    doc, sid, debug_out = _run_analyzer(P(), debug=True)
+    assert doc.get(sid).analysis_status == "ready"
+    assert len(debug_out) == 1
+    text = debug_out[0]
+    assert "语法分析 句段#" in text
+    assert "[请求 prompt]" in text and "彼は行っています" in text
+    assert "[响应]" in text and "tokens 5+10=15" in text
+    assert "主谓" in text
+
+
+def test_grammar_stage_progression():
+    """成功路径的阶段推进：queued → rendering → requesting → parsing →（完成清空）。"""
+    import json
+
+    from src.nlp.grammar import STAGE_PARSING, STAGE_RENDERING, STAGE_REQUESTING
+    from src.nlp.llm_client import ChatResult
+    from src.nlp.prompt_engine import PromptEngine
+    from src.subtitle.document import SessionDocument
+
+    stages = []
+
+    class P:
+        cfg = None
+        online = True
+
+        def chat(self, prompt, **kw):
+            doc = stage_probe["doc"]
+            sid = stage_probe["sid"]
+            stages.append(doc.get(sid).analysis_stage)
+            return ChatResult(json.dumps({"structure": None, "grammar_points": [],
+                                          "vocabulary": [], "extra": {}}))
+
+    prompts = PromptEngine(PROJECT_ROOT / "config" / "prompts")
+    profile = get_profile(PROJECT_ROOT / "config" / "languages", "ja")
+    doc = SessionDocument(language_profile="ja", source_lang="ja", target_lang="zh")
+    sid = doc.add(0.0, 1.0, "テスト", "测试")
+    stage_probe = {"doc": doc, "sid": sid}
+    analyzer = GrammarAnalyzer(P(), prompts, profile, doc)
+    analyzer.submit(sid)
+    analyzer.drain()
+    assert stages == [STAGE_REQUESTING]  # chat 时处于 requesting
+    assert doc.get(sid).analysis_stage == ""  # 完成后清空
+
+
+def test_grammar_error_classification():
+    """失败分类：契约/网络/未绑定，原因记录在句段上。"""
+    import json
+
+    from src.nlp.llm_client import ChatResult
+    from src.nlp.prompt_engine import PromptEngine
+    from src.subtitle.document import ANALYSIS_FAILED, SessionDocument
+    from src.nlp.grammar import GrammarAnalyzer
+    from openai import APIConnectionError
+
+    prompts = PromptEngine(PROJECT_ROOT / "config" / "prompts")
+    profile = get_profile(PROJECT_ROOT / "config" / "languages", "ja")
+
+    # 契约错误：模型返回非契约 JSON
+    class BadJSON:
+        cfg = None
+        online = True
+
+        def chat(self, prompt, **kw):
+            return ChatResult("not json at all")
+
+    doc, sid, _ = _run_analyzer(BadJSON())
+    assert doc.get(sid).analysis_status == ANALYSIS_FAILED
+    assert "解析错误" in doc.get(sid).analysis_error  # 纯文本非 JSON → JSONDecodeError → 解析错误
+
+    class BadContract:
+        cfg = None
+        online = True
+
+        def chat(self, prompt, **kw):
+            return ChatResult(json.dumps({"grammar_points": "not-a-list"}))
+
+    doc, sid, _ = _run_analyzer(BadContract())
+    assert "契约" in doc.get(sid).analysis_error
+
+    class NetErr:
+        cfg = None
+        online = True
+
+        def chat(self, prompt, **kw):
+            raise APIConnectionError(request=None)
+
+    doc, sid, _ = _run_analyzer(NetErr())
+    assert "模型调用错误" in doc.get(sid).analysis_error
+    assert "网络" in doc.get(sid).analysis_error
+
+    # 未绑定
+    doc, sid, _ = _run_analyzer(None)
+    assert "未绑定" in doc.get(sid).analysis_error
+
+
+def test_extract_json_tolerates_trailing_junk():
+    """raw_decode：合法 JSON 后尾随杂散文本（含花括号）都能取到首个对象。"""
+    from src.nlp.translate import _extract_json
+
+    good = '{"structure": {"type": "t"}, "extra": {}}'
+    assert _extract_json(good)["structure"]["type"] == "t"
+    assert _extract_json(good + "\n模型多说的解释……")["structure"]["type"] == "t"
+    assert _extract_json(good + '\n另一个对象 {"a": 1}')["structure"]["type"] == "t"
+    assert _extract_json(f"```json\n{good}\n```")["structure"]["type"] == "t"
+
+
+def test_extra_string_wrapped_into_object():
+    """模型把 extra 输出为字符串时包装为对象，不判整句失败。"""
+    payload = validate_analysis_payload({
+        "structure": None, "grammar_points": [], "vocabulary": [],
+        "extra": "这句话是口语省略句",
+    })
+    assert payload["extra"] == {"note": "这句话是口语省略句"}

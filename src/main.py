@@ -276,6 +276,7 @@ def rollover_profile(
                     recorder.document,
                     on_update=runtime.get("on_grammar_update"),
                     lease=slots.grammar_lease,
+                    debug=debug_hook,
                 )
                 if slots is not None
                 else None
@@ -464,6 +465,16 @@ def run(args: argparse.Namespace) -> int:
             else None
         )
         sampler = SystemSampler()
+
+        def _make_notebook():
+            """分析笔记：文档/档案经 getter 取运行态当前值（切换后跟随新会话）。"""
+            from .ui.notebook import create_notebook_window
+
+            return create_notebook_window(
+                lambda: runtime["recorder"].document,
+                lambda: runtime["profile"],
+            )
+
         try:
             overlay = create_overlay(
                 display_order=profile.subtitle.get("display_order", "source_first"),
@@ -475,6 +486,7 @@ def run(args: argparse.Namespace) -> int:
                 sampler=sampler,
                 confirm_exit=True,
                 profiles=controller.available_profiles() if controller is not None else None,
+                notebook_factory=_make_notebook,
             )
         except OverlayUnavailableError as e:
             print(f"⚠ 悬浮窗不可用（{e}），退回纯控制台模式")
@@ -500,6 +512,7 @@ def run(args: argparse.Namespace) -> int:
             recorder.document,
             on_update=on_grammar_update,
             lease=slots.grammar_lease,
+            debug=debug_hook,
         )
         if overlay is not None:
             overlay.set_grammar_enabled(grammar.available)

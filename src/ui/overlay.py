@@ -176,6 +176,7 @@ def make_overlay_window_class():
             sampler=None,
             confirm_exit: bool = False,
             profiles=None,
+            notebook_factory=None,
         ):
             super().__init__()
             self.profile = profile
@@ -189,6 +190,8 @@ def make_overlay_window_class():
             self._legacy_id = 0
             self._paused = False
             self._settings_dialog = None
+            self._notebook_window = None
+            self._notebook_factory = notebook_factory
             self._preview_active = False
             self._appearance_saved = None
             self.grammar_card = None
@@ -282,6 +285,10 @@ def make_overlay_window_class():
             self.btn_pause.toggled.connect(self._on_pause_toggled)
             self.btn_clear = QPushButton(tr("overlay.clear"), self.barA)
             self.btn_clear.clicked.connect(self._on_clear_clicked)
+            self.btn_notebook = QPushButton(tr("overlay.notebook"), self.barA)
+            self.btn_notebook.setObjectName("btnNotebook")
+            self.btn_notebook.setVisible(notebook_factory is not None)
+            self.btn_notebook.clicked.connect(self.open_notebook)
             self.btn_settings = QPushButton(tr("overlay.settings"), self.barA)
             self.btn_settings.clicked.connect(self.open_settings)
             self.btn_close = QPushButton("×", self.barA)
@@ -294,6 +301,7 @@ def make_overlay_window_class():
             bar.addStretch(1)
             bar.addWidget(self.btn_pause)
             bar.addWidget(self.btn_clear)
+            bar.addWidget(self.btn_notebook)
             bar.addWidget(self.btn_settings)
             bar.addWidget(self.btn_close)
 
@@ -495,6 +503,17 @@ def make_overlay_window_class():
                     return
             self.subtitle_view.clear()
 
+        def open_notebook(self) -> None:
+            """分析笔记：已分析句子按识别顺序集中查看，可导出 Markdown。"""
+            if self._notebook_factory is None:
+                return
+            if self._notebook_window is None:
+                self._notebook_window = self._notebook_factory()
+            self._notebook_window.refresh()
+            self._notebook_window.show()
+            self._notebook_window.raise_()
+            self._notebook_window.activateWindow()
+
         def open_settings(self) -> None:
             """打开设置页（A 栏按钮与句块右键「外观设置…」同一入口）。
 
@@ -542,7 +561,8 @@ def make_overlay_window_class():
             self._click_through = on
             self.act_through.setChecked(on)
             self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, on)
-            for b in (self.btn_menu, self.btn_pause, self.btn_clear, self.btn_settings, self.btn_close):
+            for b in (self.btn_menu, self.btn_pause, self.btn_clear, self.btn_notebook,
+                      self.btn_settings, self.btn_close):
                 b.setVisible(not on)
             self.show()
             self.tray.showMessage(
@@ -928,6 +948,8 @@ def make_overlay_window_class():
                 self.grammar_card.close()
             if self._settings_dialog is not None:
                 self._settings_dialog.close()
+            if self._notebook_window is not None:
+                self._notebook_window.close()
             self.tray.hide()
             QApplication.quit()
             super().closeEvent(event)
@@ -951,6 +973,7 @@ def create_overlay(
     sampler=None,
     confirm_exit: bool = False,
     profiles=None,
+    notebook_factory=None,
 ):
     """创建悬浮窗（延迟导入 PyQt6，确保 QApplication 已存在）。"""
     global _OVERLAY_CLASS, _APP_REF
@@ -982,4 +1005,5 @@ def create_overlay(
         sampler=sampler,
         confirm_exit=confirm_exit,
         profiles=profiles,
+        notebook_factory=notebook_factory,
     )

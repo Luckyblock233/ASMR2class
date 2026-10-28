@@ -137,25 +137,10 @@ def list_providers(cfg: GlobalConfig) -> int:
 
 
 def _build_vad(cfg: GlobalConfig):
-    """按 vad 配置创建 VAD 后端；加载失败报错并回退 Silero（不阻断主流程）。"""
-    from .asr.engine import setup_cuda_dll_dirs
-    from .asr.vad import create_vad_fn
+    """创建 Silero VAD（固定后端）。"""
+    from .asr.vad import create_silero_vad
 
-    # onnxruntime-gpu 的 CUDA EP 依赖 pip 版 nvidia DLL（cudart/cudnn/cublas），
-    # 需在创建推理 session 前注册 DLL 目录（幂等；非 Windows 为 no-op）
-    setup_cuda_dll_dirs()
-    try:
-        vad = create_vad_fn(cfg.vad, cfg.segmentation)
-    except Exception as e:  # noqa: BLE001
-        print(f"⚠ VAD 后端 {cfg.vad.backend} 加载失败：{e}\n  已回退内置 Silero VAD。")
-        from .asr.vad import SileroVad
-
-        vad = SileroVad(min_silence_ms=cfg.segmentation.silence_ms, pad_ms=200)
-        cfg.vad.backend = "silero"
-    active_provider = getattr(vad, "active_provider", "")
-    device_note = f"（{active_provider}）" if active_provider else ""
-    print(f"VAD：{cfg.vad.backend}{device_note}")
-    return vad
+    return create_silero_vad(min_silence_ms=cfg.segmentation.silence_ms, pad_ms=200)
 
 
 def save_current_session(

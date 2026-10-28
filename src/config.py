@@ -145,18 +145,6 @@ class SegmentationConfig:
 
 
 @dataclass
-class VADConfig:
-    """VAD 后端配置（可插拔：silero | whisper_asmr）。"""
-
-    backend: str = "silero"
-    threshold: float = 0.5         # whisper_asmr 语音帧判定阈值（负阈值自动 -0.15 滞后）
-    model_path: str = ""           # whisper_asmr 的 ONNX 路径（相对项目根自动锚定）
-    device: str = "auto"           # whisper_asmr 推理设备：auto | cuda | cpu（auto = 有 CUDA EP 则用 GPU）
-    recompute_ms: int = 1000       # whisper_asmr 增量推理：新增音频不足该间隔复用缓存（切句确认不受限）
-    download: dict[str, Any] = field(default_factory=dict)  # hf_repo/hf_file/modelscope_repo/modelscope_file
-
-
-@dataclass
 class BlockConfig:
     max_sentences: int = 8          # 块句数上限（离线模式放宽到 20，FR-C2.5）
     max_sentences_offline: int = 20
@@ -288,7 +276,6 @@ class GlobalConfig:
     asr: ASRConfig = field(default_factory=ASRConfig)
     audio: AudioConfig = field(default_factory=AudioConfig)
     segmentation: SegmentationConfig = field(default_factory=SegmentationConfig)
-    vad: VADConfig = field(default_factory=VADConfig)
     context: ContextConfig = field(default_factory=ContextConfig)
     ui: UIConfig = field(default_factory=UIConfig)
     default_profile: str = "ja"
@@ -408,18 +395,6 @@ def load_config(root: Path | None = None) -> GlobalConfig:
         max_segment_sec=float(seg_raw.get("max_segment_sec") or 15.0),
     )
 
-    vad_raw = raw.get("vad") or {}
-    vad = VADConfig(
-        backend=str(vad_raw.get("backend") or "silero"),
-        threshold=float(vad_raw.get("threshold") or 0.5),
-        model_path=str(vad_raw.get("model_path") or ""),
-        device=str(vad_raw.get("device") or "auto"),
-        recompute_ms=int(vad_raw.get("recompute_ms") or 1000),
-        download=vad_raw.get("download") or {},
-    )
-    if vad.model_path and not Path(vad.model_path).is_absolute():
-        vad.model_path = str(root / vad.model_path)
-
     ctx_raw = raw.get("context") or {}
     blk_raw = ctx_raw.get("block") or {}
     mem_raw = ctx_raw.get("memory") or {}
@@ -520,7 +495,6 @@ def load_config(root: Path | None = None) -> GlobalConfig:
         asr=asr,
         audio=audio,
         segmentation=seg,
-        vad=vad,
         context=ctx,
         ui=ui,
         default_profile=str(session_raw.get("default_profile") or "ja"),

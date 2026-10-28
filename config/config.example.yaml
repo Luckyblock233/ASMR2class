@@ -10,11 +10,11 @@
 # 要使用多 Provider / 本地模型 / 双槽位分离，请改用下方 providers + slots 节。
 # api_key 也可用环境变量 ASR2CLASS_LLM_API_KEY 覆盖（优先级更高，且不写入文件）。
 llm:
-  base_url: ""        # 例如 https://your-provider.example.com/v1
-  api_key: ""         # 请勿提交到版本库；建议改用环境变量
-  model: ""           # 例如 your-model-name
-  timeout_sec: 30     # 单次请求超时
-  max_retries: 3      # 指数退避重试次数（1s/2s/4s...）
+  base_url: "" # 例如 https://your-provider.example.com/v1
+  api_key: "" # 请勿提交到版本库；建议改用环境变量
+  model: "" # 例如 your-model-name
+  timeout_sec: 30 # 单次请求超时
+  max_retries: 3 # 指数退避重试次数（1s/2s/4s...）
 
 # ---- 模型提供方（Provider）与槽位（Slot）----
 # 翻译与语法分析是两个独立槽位，按 provider id 绑定；可绑同一 provider。
@@ -56,68 +56,61 @@ llm:
 #   translation: local-translator      # 翻译槽绑定
 #   grammar: my-cloud                  # 语法槽绑定（留空 = 语法分析停用）
 
-
 # ---- ASR / GPU 策略（见需求文档 §4.2）----
 asr:
-  device: auto        # auto | cuda | cpu ；cpu = 纯 CPU 模式
-  model_size: small   # GPU 默认 small；medium 需显式改这里
-  compute_type: ""    # 留空自动选择：cuda->int8_float16, cpu->int8
-  vram_budget_mb: 2500        # ASR 显存预算
-  vram_min_free_mb: 2000      # 须为其他应用保留的空闲显存，不足则自动降级
+  device: auto # auto | cuda | cpu ；cpu = 纯 CPU 模式
+  model_size: small # GPU 默认 small；medium 需显式改这里
+  compute_type: "" # 留空自动选择：cuda->int8_float16, cpu->int8
+  vram_budget_mb: 2500 # ASR 显存预算
+  vram_min_free_mb: 2000 # 须为其他应用保留的空闲显存，不足则自动降级
   beam_size: 5
   # 幻觉门控：静音/BGM 段会幻觉出视频结尾高频字幕句（如「ご視聴ありがとう…」）。
   # 同时满足 no_speech_prob > 阈值 且 avg_logprob < 阈值 的段被丢弃（调低阈值更严格）
   no_speech_threshold: 0.6
   log_prob_threshold: -1.0
-  compression_ratio_threshold: 2.4   # 重复性幻觉（压缩比异常高）直接丢弃
-  condition_on_previous: false       # true 会让幻觉句把后续段落带偏，流式场景保持关闭
+  compression_ratio_threshold: 2.4 # 重复性幻觉（压缩比异常高）直接丢弃
+  condition_on_previous: false # true 会让幻觉句把后续段落带偏，流式场景保持关闭
   # 温度回退链：低质量窗口按链升温重试（[0.0] = 关闭回退，固定贪心）
   temperature_fallback: [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
   # 幻觉短语黑名单：形态固定的视频结尾客套话（归一化后包含匹配即丢弃，误杀时删条目）
-  hallucination_phrases: ["視聴してくださって", "ご視聴ありがとう", "最後までご視聴",
-                          "最後まで見てくださって", "チャンネル登録",
-                          "thank you for watching", "thanks for watching", "please subscribe"]
+  hallucination_phrases:
+    [
+      "視聴してくださって",
+      "ご視聴ありがとう",
+      "最後までご視聴",
+      "最後まで見てくださって",
+      "チャンネル登録",
+      "thank you for watching",
+      "thanks for watching",
+      "please subscribe",
+    ]
 
 # ---- 音频采集 ----
 audio:
-  source: mic         # mic | loopback
+  source: mic # mic | loopback
   sample_rate: 16000
-  block_ms: 30        # 回调块大小
+  block_ms: 30 # 回调块大小
   # loopback 设备名（Windows），留空 = 默认输出设备
   loopback_device: ""
 
 # ---- 断句（VAD）----
+# 固定使用 faster-whisper 内置 Silero VAD（零下载），断句参数见上方 segmentation 节
 segmentation:
-  silence_ms: 500     # 静音多久判为句尾
+  silence_ms: 500 # 静音多久判为句尾
   max_segment_sec: 15 # 强制切段上限
-
-# ---- VAD 后端（可插拔：silero | whisper_asmr）----
-vad:
-  backend: silero     # silero = faster-whisper 内置（默认，零下载）
-  # whisper_asmr = 耳语/软语专用 VAD（20ms 帧高精度，首次使用自动下载 ONNX）
-  # backend: whisper_asmr
-  # threshold: 0.5               # 语音帧判定阈值（负阈值自动 -0.15 滞后防抖）
-  # model_path: "models/whisper-vad-asmr.onnx"
-  # device: auto                 # auto | cuda | cpu（GPU 需换装 onnxruntime-gpu，见 README）
-  # recompute_ms: 1000           # 增量推理节流：新增音频不足该值复用缓存帧概率（切句确认不受限）
-  # download:
-  #   hf_repo: "TransWithAI/Whisper-Vad-EncDec-ASMR-onnx"
-  #   hf_file: "model.onnx"
-  #   modelscope_repo: ""        # 无镜像则留空
-  #   modelscope_file: ""
 
 # ---- 上下文感知翻译（见 doc/上下文感知翻译-专项需求文档）----
 context:
-  tail_sentences: 3        # FR-C1 滑动窗口：前块尾部历史句数，0 = 关闭
-  history_max_tokens: 512  # FR-C1.3 历史 token 上限（粗估，超出裁最早的历史）
+  tail_sentences: 3 # FR-C1 滑动窗口：前块尾部历史句数，0 = 关闭
+  history_max_tokens: 512 # FR-C1.3 历史 token 上限（粗估，超出裁最早的历史）
   block:
-    max_sentences: 8       # FR-C2 块句数上限（3-15）；1 = 退化为逐句翻译
-    max_sentences_offline: 20  # 离线批处理模式的块上限（FR-C2.5）
-    silence_gap_sec: 1.5   # FR-C2.2 静音间隙超过该值即成块
+    max_sentences: 8 # FR-C2 块句数上限（3-15）；1 = 退化为逐句翻译
+    max_sentences_offline: 20 # 离线批处理模式的块上限（FR-C2.5）
+    silence_gap_sec: 1.5 # FR-C2.2 静音间隙超过该值即成块
   memory:
-    enabled: true          # FR-C3 滚动记忆总开关
-    glossary_max_entries: 100  # 实体登记表上限，超出按 LRU 淘汰
-    style_max_chars: 200       # 风格摘要上限
+    enabled: true # FR-C3 滚动记忆总开关
+    glossary_max_entries: 100 # 实体登记表上限，超出按 LRU 淘汰
+    style_max_chars: 200 # 风格摘要上限
 
 # ---- 会话 ----
 session:
@@ -130,28 +123,28 @@ session:
 # 外观个性化收敛为两项：主题（dark/light 预定义配色）+ 背景不透明度。
 # 语言档案可用 appearance: 节覆盖下列项（档案优先，未覆盖回落到这里）。
 ui:
-  overlay: true       # 实时模式显示置顶半透明字幕悬浮窗
-  theme: dark         # 主题：dark | light（配色/字号由主题预定义）
-  opacity: 0.85       # 旧版整窗透明度；仅作为 background_opacity 的迁移输入
+  overlay: true # 实时模式显示置顶半透明字幕悬浮窗
+  theme: dark # 主题：dark | light（配色/字号由主题预定义）
+  opacity: 0.85 # 旧版整窗透明度；仅作为 background_opacity 的迁移输入
   # background_opacity: 0.85    # 背景不透明度（0.2-1.0），留空沿用 opacity
-  line_spacing: 1.15            # 行距倍数
-  window_width: 720             # 悬浮窗初始尺寸
+  line_spacing: 1.15 # 行距倍数
+  window_width: 720 # 悬浮窗初始尺寸
   window_height: 480
-  show_bar_a: true              # A 栏：控制栏
-  show_bar_b: true              # B 栏：语言档案/槽位栏
-  show_bar_c: true              # C 栏：运行状态栏
-  auto_scroll: true             # 新句自动滚动到底（用户上翻时自动暂停跟随）
-  compact_mode: false           # 紧凑模式
-  ui_language: zh_CN            # UI 文案语言：zh_CN | en
-  view_capacity: 200            # 实时视图句块容量上限（文档仍完整保存）
+  show_bar_a: true # A 栏：控制栏
+  show_bar_b: true # B 栏：语言档案/槽位栏
+  show_bar_c: true # C 栏：运行状态栏
+  auto_scroll: true # 新句自动滚动到底（用户上翻时自动暂停跟随）
+  compact_mode: false # 紧凑模式
+  ui_language: zh_CN # UI 文案语言：zh_CN | en
+  view_capacity: 200 # 实时视图句块容量上限（文档仍完整保存）
   # 气泡模式（漫画对话框）独立外观：留空/0 = 跟随主悬浮窗
   # bubble_theme: ""        # dark | light | 空（跟随主主题）
   # bubble_opacity: 0       # 0 = 跟随；20-100 = 独立不透明度百分比
   # bubble_font_size: 0     # 0 = 主题默认字号
   # C 栏健康阈值：≤good 绿色、good–warn 黄色、>warn 红色（扫一眼颜色即知健康度）
-  latency_good_ms: 500          # ASR/翻译平均耗时良好阈值
-  latency_warn_ms: 1000         # 超过该值显示红色
-  ram_warn_percent: 85          # RAM 占用超过该百分比显示橙色
+  latency_good_ms: 500 # ASR/翻译平均耗时良好阈值
+  latency_warn_ms: 1000 # 超过该值显示红色
+  ram_warn_percent: 85 # RAM 占用超过该百分比显示橙色
   # bubble_fade: dim        # 气泡淡出：off（关闭）| dim（降低透明度保持）| hide（淡出后隐藏）
   # bubble_fade_min: 0.25   # dim 模式的最低透明度
   # bubble_rms_threshold: 0.01  # 实时模式：RMS 低于该值 → 气泡淡出

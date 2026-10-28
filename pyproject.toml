@@ -15,14 +15,7 @@ dependencies = [
     # Windows 上 ctranslate2 的 CUDA 运行时（cuBLAS 12 + cuDNN 9）；
     # 缺失时报 cublas64_12.dll / cudnn*.dll not found
     "nvidia-cublas-cu12; sys_platform == 'win32'",
-    # whisper_asmr VAD 的 GPU 推理（onnxruntime-gpu 的 CUDA EP 需要的 CUDA 12 组件库）；
-    # 锁进依赖后 uv sync 在 Windows 上天然装 GPU 版，不会与 CPU 版 onnxruntime 互相覆盖
-    "onnxruntime-gpu==1.26.*; sys_platform == 'win32'",
     "nvidia-cudnn-cu12; sys_platform == 'win32'",
-    "nvidia-cuda-runtime-cu12; sys_platform == 'win32'",
-    "nvidia-cufft-cu12; sys_platform == 'win32'",
-    "nvidia-curand-cu12; sys_platform == 'win32'",
-    "nvidia-cuda-nvrtc-cu12; sys_platform == 'win32'",
     # M2：悬浮窗 GUI 与字幕解析
     "PyQt6>=6.6.0",
     "pysrt>=1.1.2",
@@ -42,9 +35,6 @@ dev = [
 
 [tool.uv]
 package = false
-# faster-whisper 传递依赖的 onnxruntime（CPU 版）在 Windows 上由 onnxruntime-gpu 替代
-#（两发行版安装同名模块文件，不能共存；GPU 版功能为 CPU 版超集）
-override-dependencies = ["onnxruntime>=1.14,<2; sys_platform != 'win32'"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

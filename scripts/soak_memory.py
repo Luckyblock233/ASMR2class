@@ -119,31 +119,6 @@ def main() -> None:
     pump()
     report("语法卡弹出 ×500", before)
 
-    # ---- 5. WhisperAsmrVad 缓存（假 session，长跑不切句 → 检查缓存上界）----
-    import numpy as np
-
-    from src.asr.vad import WhisperAsmrVad
-
-    class FakeSession:
-        class _In:
-            name = "input"
-
-        def get_inputs(self):
-            return [self._In()]
-
-        def run(self, _out, feed):
-            return [np.zeros((1, 3000), dtype=np.float32)]
-
-    vad = WhisperAsmrVad("fake", session=FakeSession())
-    before = rss_mb()
-    # 模拟 pending 不断增长（静音段不切句，最多到 max_segment_sec 被 streamer 强切）
-    audio = np.zeros(480000 * 3, dtype=np.float32)
-    for i in range(100):
-        vad(audio[: 16000 * (i % 15 + 1)])  # 长度周期性回退 → 缓存重置
-    probs_bytes = sum(p.nbytes for p in vad._final_probs)
-    report("whisper_asmr VAD 缓存 ×100 次调用", before)
-    print(f"    _final_probs 驻留：{len(vad._final_probs)} 块 / {probs_bytes / 1024:.0f} KB")
-
     print("\n判读：单步增长 >50MB 需要关注；<10MB 属正常波动。")
 
 

@@ -41,8 +41,7 @@ _DLL_DIR_HANDLES: list = []
 def _find_cuda_dll_dirs(roots: list[str]) -> list[Path]:
     """在 site-packages 根目录列表中查找 nvidia pip 包的 DLL 目录（nvidia/*/bin 通配）。
 
-    ctranslate2 需要 cublas/cudnn；onnxruntime-gpu 的 CUDA EP 另外需要
-    cuda_runtime/cufft/curand 等，通配扫描一次覆盖全部（含未来新增组件）。
+    ctranslate2 需要 cublas/cudnn 等 CUDA 12 组件，通配扫描一次覆盖全部（含未来新增组件）。
     """
     found: list[Path] = []
     for root in roots:

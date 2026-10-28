@@ -84,21 +84,9 @@ loopback 设备选择：`--loopback-device` 用设备名的任意一段做（大
 | `context.memory.enabled`              | true | 滚动记忆（术语表 + 风格摘要）总开关        |
 | `context.memory.glossary_max_entries` | 100  | 术语表上限，LRU 淘汰                       |
 
-### VAD 后端（config.yaml `vad:` 节）
+### VAD
 
-| 配置             | 默认   | 说明                                                                                     |
-| ---------------- | ------ | ---------------------------------------------------------------------------------------- |
-| `vad.backend`    | silero | `silero`（内置，零下载）或 `whisper_asmr`（耳语/软语专用 ONNX，20ms 帧高精度）           |
-| `vad.threshold`  | 0.5    | whisper_asmr 语音帧判定阈值（调低更灵敏，负阈值自动 -0.15 滞后防抖）                     |
-| `vad.model_path` | -      | whisper_asmr 的 ONNX 路径；缺失时按 `vad.download` 配置的 HF/ModelScope 仓库自动下载     |
-| `vad.device`     | auto   | whisper_asmr 推理设备：`auto`（有 CUDA 则用 GPU）/ `cuda` / `cpu`                        |
-| `vad.recompute_ms` | 1000 | whisper_asmr 增量推理的重算节流间隔：新增音频不足该值时复用缓存帧概率（切句确认不受限） |
-
-ASMR/耳语内容建议 `whisper_asmr`：判别式模型对耳语段检出率显著高于 Silero，且不受语音内容影响（纯声学帧分类）。切换后端只需改 `vad.backend`，重启生效。whisper_asmr 采用增量推理：完整的 30s 块概率定稿缓存、尾部块按 `recompute_ms` 节流重算、切句确认点立即重算，分段结果与全量重算完全一致，流式 CPU 开销约降为原来的 1/5。
-
-**GPU 推理（仅 whisper_asmr）**：Windows 上依赖已锁定为 `onnxruntime-gpu==1.26.*`（CUDA 12 + cuDNN 9 构建，与项目内 ctranslate2 的 cu12 栈一致），`uv sync` 后自动生效，无需手动换装。实现方式：pyproject 用 `override-dependencies` 把 faster-whisper 传递依赖的 CPU 版 `onnxruntime` 限定为非 Windows 平台（两个发行版安装同名模块文件，不能共存；GPU 版是 CPU 版超集），Windows 改由 `onnxruntime-gpu` + `nvidia-*-cu12` 组件库（cuDNN/cuFFT/cuRAND 等，启动时自动注册 DLL 目录）提供。版本钉 1.26.x 的原因：1.27 起 PyPI 默认包改为 CUDA 13 构建，与 cu12 栈不兼容。
-
-启动时显示 `VAD：whisper_asmr（CUDAExecutionProvider）` 即 GPU 生效；CUDA 初始化失败时自动回退 CPU 并打印针对性诊断。若历史上手动换装过导致文件残留（表现：装了 GPU 版却显示 CPU），运行 `scripts\enable-vad-gpu.ps1` 一键修复并验证。显存紧张时（本地 LLM + medium ASR 同驻）可设 `vad.device: cpu`——增量推理下 CPU 开销已很小，GPU 主要进一步降低单次前向延迟。
+固定使用 faster-whisper 内置 Silero VAD（零下载）。断句参数（静音判定时长、段上限）见 `segmentation:` 节。
 
 三个机制可任意组合；模板中删除对应变量即静默停用该机制（日志有提示）。语言档案可用同名 `context:` 节逐项覆盖，并可用 `style_preset:` 锁定风格设定（档案值优先于 LLM 推断）。翻译响应 JSON 中的 `glossary_updates`/`style_updates` 自动回写记忆，不增加额外请求。
 

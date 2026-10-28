@@ -200,6 +200,21 @@ class UIConfig:
     latency_good_ms: int = 500             # ASR/翻译平均耗时良好阈值
     latency_warn_ms: int = 1000            # 超过该值显示红色
     ram_warn_percent: int = 85             # RAM 占用超过该百分比显示橙色
+    # 气泡模式（漫画对话框）独立外观：空/None/0 = 跟随主悬浮窗
+    bubble_theme: str = ""                 # dark | light | 空（跟随主主题）
+    bubble_opacity: float | None = None    # 气泡背景不透明度（None = 跟随）
+    bubble_font_size: int = 0              # 气泡字号（0 = 主题默认）
+    # 气泡淡出：off（不淡出）| dim（降到低透明度保持）| hide（淡出后隐藏）
+    bubble_fade: str = "dim"
+    bubble_fade_min: float = 0.25          # dim 模式的最低透明度
+    # 气泡淡出触发（实时模式）：RMS 低于阈值 → 淡出；
+    # RMS 正常但 VAD 无人声 → 显示待机文字；均需持续超过延时才触发（防抖）
+    bubble_rms_threshold: float = 0.01
+    bubble_idle_text: str = "……"           # 待机文字（可自定义，如 ♪）
+    bubble_fade_delay_sec: float = 1.5     # 低于阈值的持续延时（秒）
+    # 刚识别的字幕进入「有声无人声」片段时保持显示的时长（秒），
+    # 避免字幕刚出来就被待机文字顶掉；0 = 立即切换
+    bubble_idle_hold_sec: float = 3.0
 
     @property
     def effective_background_opacity(self) -> float:
@@ -298,6 +313,11 @@ class GlobalConfig:
 def _load_yaml(path: Path) -> dict[str, Any]:
     with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
+
+
+def _float_or(value: Any, default: float) -> float:
+    """可空 float 解析：None 用默认值，0 等合法 falsy 值原样保留。"""
+    return default if value is None else float(value)
 
 
 def ensure_config_file(root: Path) -> Path:
@@ -475,6 +495,20 @@ def load_config(root: Path | None = None) -> GlobalConfig:
         latency_good_ms=int(ui_raw.get("latency_good_ms") or 500),
         latency_warn_ms=int(ui_raw.get("latency_warn_ms") or 1000),
         ram_warn_percent=int(ui_raw.get("ram_warn_percent") or 85),
+        bubble_theme=str(ui_raw.get("bubble_theme") or ""),
+        bubble_opacity=(
+            float(ui_raw["bubble_opacity"])
+            if ui_raw.get("bubble_opacity") is not None
+            else None
+        ),
+        bubble_font_size=int(ui_raw.get("bubble_font_size") or 0),
+        bubble_fade=str(ui_raw.get("bubble_fade") or "dim"),
+        # 0 是合法配置值（如延时 0 = 立即触发），不能用 `or 默认值` 兜底
+        bubble_fade_min=_float_or(ui_raw.get("bubble_fade_min"), 0.25),
+        bubble_rms_threshold=_float_or(ui_raw.get("bubble_rms_threshold"), 0.01),
+        bubble_idle_text=str(ui_raw.get("bubble_idle_text") or "……"),
+        bubble_fade_delay_sec=_float_or(ui_raw.get("bubble_fade_delay_sec"), 1.5),
+        bubble_idle_hold_sec=_float_or(ui_raw.get("bubble_idle_hold_sec"), 3.0),
     )
 
     session_raw = raw.get("session") or {}
@@ -554,6 +588,15 @@ def save_ui_config(cfg: GlobalConfig, ui: UIConfig) -> None:
             "latency_good_ms": ui.latency_good_ms,
             "latency_warn_ms": ui.latency_warn_ms,
             "ram_warn_percent": ui.ram_warn_percent,
+            "bubble_theme": ui.bubble_theme,
+            "bubble_opacity": ui.bubble_opacity,
+            "bubble_font_size": ui.bubble_font_size,
+            "bubble_fade": ui.bubble_fade,
+            "bubble_fade_min": ui.bubble_fade_min,
+            "bubble_rms_threshold": ui.bubble_rms_threshold,
+            "bubble_idle_text": ui.bubble_idle_text,
+            "bubble_fade_delay_sec": ui.bubble_fade_delay_sec,
+            "bubble_idle_hold_sec": ui.bubble_idle_hold_sec,
         }
     )
     # 主题取代逐项颜色/字体配置：保存时清掉旧字段

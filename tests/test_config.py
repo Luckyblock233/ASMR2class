@@ -186,6 +186,74 @@ def test_save_ui_config_atomic_and_preserves_other_sections(tmp_path):
     assert not list(path.parent.glob("*.tmp"))  # 原子写不留临时文件
 
 
+def test_save_ui_config_roundtrips_every_field(tmp_path):
+    """回归：UIConfig 所有可持久化字段保存→重载后一致（曾漏写 bubble_fade_delay_sec）。
+
+    新增 UIConfig 字段时本测试强制同步 save_ui_config 的写回映射。
+    """
+    import dataclasses
+
+    root = _write_example(tmp_path)
+    cfg = load_config(root)
+    ui = UIConfig(
+        overlay=False,
+        theme="light",
+        background_opacity=0.6,
+        line_spacing=1.4,
+        window_width=800,
+        window_height=600,
+        show_bar_a=False,
+        show_bar_b=False,
+        show_bar_c=False,
+        auto_scroll=False,
+        compact_mode=True,
+        ui_language="en",
+        view_capacity=100,
+        latency_good_ms=300,
+        latency_warn_ms=900,
+        ram_warn_percent=70,
+        bubble_theme="light",
+        bubble_opacity=0.5,
+        bubble_font_size=22,
+        bubble_fade="hide",
+        bubble_fade_min=0.4,
+        bubble_rms_threshold=0.05,
+        bubble_idle_text="♪",
+        bubble_fade_delay_sec=3.5,
+        bubble_idle_hold_sec=4.5,
+    )
+    save_ui_config(cfg, ui)
+    reloaded = load_config(root).ui
+    skipped = {"opacity"}  # 旧字段：仅作迁移输入，不写回
+    for f in dataclasses.fields(UIConfig):
+        if f.name in skipped:
+            continue
+        expected = getattr(ui, f.name)
+        if f.name == "background_opacity":
+            expected = ui.effective_background_opacity  # 写回的是生效值
+        actual = getattr(reloaded, f.name)
+        assert actual == pytest.approx(expected), f"字段 {f.name} 未持久化"
+
+
+def test_ui_zero_float_values_respected(tmp_path):
+    """回归：0 是合法配置值（淡出延时 0 = 立即触发），加载不得被默认值顶替。"""
+    root = _write_example(tmp_path)
+    cfg = load_config(root)
+    raw = yaml.safe_load(cfg.config_file.read_text(encoding="utf-8"))
+    raw.setdefault("ui", {}).update(
+        {
+            "bubble_fade_delay_sec": 0.0,
+            "bubble_idle_hold_sec": 0.0,
+            "bubble_fade_min": 0.0,
+        }
+    )
+    cfg.config_file.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+    ui = load_config(root).ui
+    assert ui.bubble_fade_delay_sec == 0.0
+    assert ui.bubble_idle_hold_sec == 0.0
+    assert ui.bubble_fade_min == 0.0
+
+
 def test_save_provider_config_preserves_fields_and_skips_env_key(tmp_path, monkeypatch):
     root = _write_example(tmp_path)
     cfg = load_config(root)

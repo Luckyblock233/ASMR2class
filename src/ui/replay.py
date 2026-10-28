@@ -49,7 +49,7 @@ def run_session_preview(
         if player_box["window"] is None:
             window = create_replay_window(
                 document,
-                on_seek_highlight=overlay.subtitle_view.set_current_segment,
+                on_seek_highlight=overlay.notify_current_segment,
             )
             window.show()
             player_box["window"] = window

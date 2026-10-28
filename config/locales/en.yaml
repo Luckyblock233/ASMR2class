@@ -169,3 +169,32 @@ notebook.export_done: "Exported to:"
 notebook.sort: Sort
 notebook.sort.recognition: By recognition
 notebook.sort.analysis: By analysis
+overlay.menu.bubble: Bubble mode (comic dialog)
+bubble.exit: Exit bubble mode
+bubble.tail: Tail direction
+bubble.tail.N: Top
+bubble.tail.NE: Top-right
+bubble.tail.E: Right
+bubble.tail.SE: Bottom-right
+bubble.tail.S: Bottom
+bubble.tail.SW: Bottom-left
+bubble.tail.W: Left
+bubble.tail.NW: Top-left
+bubble.display: Display
+bubble.display.both: Source + translation
+bubble.display.source_only: Source only
+bubble.display.translation_only: Translation only
+settings.appearance.bubble_group: Bubble mode (independent)
+settings.appearance.bubble_theme_follow: Follow main overlay
+settings.appearance.bubble_follow: Follow
+settings.appearance.bubble_font: Font size
+settings.appearance.bubble_font_default: Default
+bubble.appearance: Appearance…
+settings.appearance.bubble_fade: Fade out
+settings.appearance.bubble_fade.off: Off
+settings.appearance.bubble_fade.dim: Dim and stay
+settings.appearance.bubble_fade.hide: Fade out and hide
+settings.appearance.bubble_rms: Fade RMS threshold
+settings.appearance.bubble_idle: Idle text (no speech)
+settings.appearance.bubble_hold: Keep subtitle before idle (s)
+settings.appearance.bubble_delay: Fade delay (s)

@@ -144,7 +144,17 @@ ui:
   compact_mode: false           # 紧凑模式
   ui_language: zh_CN            # UI 文案语言：zh_CN | en
   view_capacity: 200            # 实时视图句块容量上限（文档仍完整保存）
+  # 气泡模式（漫画对话框）独立外观：留空/0 = 跟随主悬浮窗
+  # bubble_theme: ""        # dark | light | 空（跟随主主题）
+  # bubble_opacity: 0       # 0 = 跟随；20-100 = 独立不透明度百分比
+  # bubble_font_size: 0     # 0 = 主题默认字号
   # C 栏健康阈值：≤good 绿色、good–warn 黄色、>warn 红色（扫一眼颜色即知健康度）
   latency_good_ms: 500          # ASR/翻译平均耗时良好阈值
   latency_warn_ms: 1000         # 超过该值显示红色
   ram_warn_percent: 85          # RAM 占用超过该百分比显示橙色
+  # bubble_fade: dim        # 气泡淡出：off（关闭）| dim（降低透明度保持）| hide（淡出后隐藏）
+  # bubble_fade_min: 0.25   # dim 模式的最低透明度
+  # bubble_rms_threshold: 0.01  # 实时模式：RMS 低于该值 → 气泡淡出
+  # bubble_idle_text: "……"    # RMS 正常但 VAD 无人声时气泡显示的待机文字
+  # bubble_idle_hold_sec: 3.0 # 刚识别的字幕在无人声片段中保持该时长后才切待机文字（0=立即）
+  # bubble_fade_delay_sec: 1.5  # 低于阈值持续该延时才淡出（防抖）

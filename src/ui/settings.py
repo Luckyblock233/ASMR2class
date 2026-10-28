@@ -736,6 +736,57 @@ def create_settings_dialog(
             form.addRow(tr("settings.appearance.ui_language"), self.a_ui_language)
             form.addRow(tr("settings.appearance.view_capacity"), self.a_capacity)
 
+            # ---- 气泡模式（独立外观，与主悬浮窗互不干扰）----
+            bubble_box = QGroupBox(tr("settings.appearance.bubble_group"), tab)
+            bubble_form = QFormLayout(bubble_box)
+            self.a_bubble_theme = QComboBox()
+            self.a_bubble_theme.addItem(tr("settings.appearance.bubble_theme_follow"), "")
+            for name in THEME_NAMES:
+                self.a_bubble_theme.addItem(tr(f"settings.appearance.theme.{name}"), name)
+            idx = self.a_bubble_theme.findData(ui.bubble_theme)
+            self.a_bubble_theme.setCurrentIndex(max(0, idx))
+            self.a_bubble_opacity = QSpinBox()
+            self.a_bubble_opacity.setRange(0, 100)
+            self.a_bubble_opacity.setSuffix(" %")
+            self.a_bubble_opacity.setSpecialValueText(tr("settings.appearance.bubble_follow"))
+            self.a_bubble_opacity.setValue(
+                round(ui.bubble_opacity * 100) if ui.bubble_opacity is not None else 0
+            )
+            self.a_bubble_font = QSpinBox()
+            self.a_bubble_font.setRange(0, 72)
+            self.a_bubble_font.setSpecialValueText(tr("settings.appearance.bubble_font_default"))
+            self.a_bubble_font.setValue(ui.bubble_font_size)
+            self.a_bubble_fade = QComboBox()
+            for mode in ("off", "dim", "hide"):
+                self.a_bubble_fade.addItem(tr(f"settings.appearance.bubble_fade.{mode}"), mode)
+            idx = self.a_bubble_fade.findData(ui.bubble_fade)
+            self.a_bubble_fade.setCurrentIndex(max(0, idx))
+            self.a_bubble_rms = QDoubleSpinBox()
+            self.a_bubble_rms.setRange(0.001, 0.5)
+            self.a_bubble_rms.setDecimals(3)
+            self.a_bubble_rms.setSingleStep(0.005)
+            self.a_bubble_rms.setValue(ui.bubble_rms_threshold)
+            self.a_bubble_idle = QLineEdit(ui.bubble_idle_text)
+            self.a_bubble_delay = QDoubleSpinBox()
+            self.a_bubble_delay.setRange(0.0, 30.0)
+            self.a_bubble_delay.setSingleStep(0.5)
+            self.a_bubble_delay.setSuffix(" s")
+            self.a_bubble_delay.setValue(ui.bubble_fade_delay_sec)
+            self.a_bubble_hold = QDoubleSpinBox()
+            self.a_bubble_hold.setRange(0.0, 30.0)
+            self.a_bubble_hold.setSingleStep(0.5)
+            self.a_bubble_hold.setSuffix(" s")
+            self.a_bubble_hold.setValue(ui.bubble_idle_hold_sec)
+            bubble_form.addRow(tr("settings.appearance.theme"), self.a_bubble_theme)
+            bubble_form.addRow(tr("settings.appearance.background_opacity"), self.a_bubble_opacity)
+            bubble_form.addRow(tr("settings.appearance.bubble_font"), self.a_bubble_font)
+            bubble_form.addRow(tr("settings.appearance.bubble_fade"), self.a_bubble_fade)
+            bubble_form.addRow(tr("settings.appearance.bubble_rms"), self.a_bubble_rms)
+            bubble_form.addRow(tr("settings.appearance.bubble_idle"), self.a_bubble_idle)
+            bubble_form.addRow(tr("settings.appearance.bubble_hold"), self.a_bubble_hold)
+            bubble_form.addRow(tr("settings.appearance.bubble_delay"), self.a_bubble_delay)
+            form.addRow(bubble_box)
+
             btn_row = QHBoxLayout()
             self.btn_apply_appearance = QPushButton(tr("settings.apply"))
             self.btn_restore_defaults = QPushButton(tr("settings.appearance.restore_defaults"))
@@ -775,6 +826,18 @@ def create_settings_dialog(
             ui.compact_mode = self.a_compact.isChecked()
             ui.ui_language = self.a_ui_language.currentText()
             ui.view_capacity = int(self.a_capacity.value())
+            ui.bubble_theme = self.a_bubble_theme.currentData() or ""
+            ui.bubble_opacity = (
+                self.a_bubble_opacity.value() / 100.0
+                if self.a_bubble_opacity.value() > 0
+                else None
+            )
+            ui.bubble_font_size = int(self.a_bubble_font.value())
+            ui.bubble_fade = self.a_bubble_fade.currentData() or "dim"
+            ui.bubble_rms_threshold = float(self.a_bubble_rms.value())
+            ui.bubble_idle_text = self.a_bubble_idle.text()
+            ui.bubble_fade_delay_sec = float(self.a_bubble_delay.value())
+            ui.bubble_idle_hold_sec = float(self.a_bubble_hold.value())
             return ui
 
         def _apply_appearance(self) -> None:
@@ -815,6 +878,18 @@ def create_settings_dialog(
             self.a_compact.setChecked(ui.compact_mode)
             self.a_ui_language.setCurrentText(ui.ui_language)
             self.a_capacity.setValue(ui.view_capacity)
+            idx = self.a_bubble_theme.findData(ui.bubble_theme)
+            self.a_bubble_theme.setCurrentIndex(max(0, idx))
+            self.a_bubble_opacity.setValue(
+                round(ui.bubble_opacity * 100) if ui.bubble_opacity is not None else 0
+            )
+            self.a_bubble_font.setValue(ui.bubble_font_size)
+            idx = self.a_bubble_fade.findData(ui.bubble_fade)
+            self.a_bubble_fade.setCurrentIndex(max(0, idx))
+            self.a_bubble_rms.setValue(ui.bubble_rms_threshold)
+            self.a_bubble_idle.setText(ui.bubble_idle_text)
+            self.a_bubble_delay.setValue(ui.bubble_fade_delay_sec)
+            self.a_bubble_hold.setValue(ui.bubble_idle_hold_sec)
 
         # ==================== 记忆页签 ====================
 
@@ -1118,3 +1193,156 @@ def create_settings_dialog(
             self._show_result(self.controller.restore_prompt_template(kind))
 
     return SettingsDialog()
+
+
+def create_bubble_appearance_dialog(
+    controller: SettingsController,
+    on_preview: Callable[[UIConfig], None] | None = None,
+    on_applied: Callable[[UIConfig], None] | None = None,
+    parent=None,
+):
+    """气泡模式专属外观设置（只含气泡三项，不含主悬浮窗设置）。
+
+    控件变化即时预览；「应用」保存；「跟随主悬浮窗」恢复全部跟随。
+    """
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtWidgets import (
+        QComboBox,
+        QDialog,
+        QDialogButtonBox,
+        QDoubleSpinBox,
+        QFormLayout,
+        QLineEdit,
+        QPushButton,
+        QSpinBox,
+    )
+
+    from .appearance import THEME_NAMES
+    from .i18n import tr
+
+    class BubbleAppearanceDialog(QDialog):
+        def __init__(self):
+            super().__init__(parent)
+            self.setAttribute(Qt.WidgetAttribute.WA_QuitOnClose, False)
+            self.setWindowTitle(tr("settings.appearance.bubble_group"))
+            ui = controller.cfg.ui
+
+            form = QFormLayout(self)
+            self.b_theme = QComboBox(self)
+            self.b_theme.addItem(tr("settings.appearance.bubble_theme_follow"), "")
+            for name in THEME_NAMES:
+                self.b_theme.addItem(tr(f"settings.appearance.theme.{name}"), name)
+            idx = self.b_theme.findData(ui.bubble_theme)
+            self.b_theme.setCurrentIndex(max(0, idx))
+
+            self.b_opacity = QSpinBox(self)
+            self.b_opacity.setRange(0, 100)
+            self.b_opacity.setSuffix(" %")
+            self.b_opacity.setSpecialValueText(tr("settings.appearance.bubble_follow"))
+            self.b_opacity.setValue(
+                round(ui.bubble_opacity * 100) if ui.bubble_opacity is not None else 0
+            )
+
+            self.b_font = QSpinBox(self)
+            self.b_font.setRange(0, 72)
+            self.b_font.setSpecialValueText(tr("settings.appearance.bubble_font_default"))
+            self.b_font.setValue(ui.bubble_font_size)
+
+            self.b_fade = QComboBox(self)
+            for mode in ("off", "dim", "hide"):
+                self.b_fade.addItem(tr(f"settings.appearance.bubble_fade.{mode}"), mode)
+            idx = self.b_fade.findData(ui.bubble_fade)
+            self.b_fade.setCurrentIndex(max(0, idx))
+
+            self.b_rms = QDoubleSpinBox(self)
+            self.b_rms.setRange(0.001, 0.5)
+            self.b_rms.setDecimals(3)
+            self.b_rms.setSingleStep(0.005)
+            self.b_rms.setValue(ui.bubble_rms_threshold)
+            self.b_idle = QLineEdit(ui.bubble_idle_text, self)
+            self.b_delay = QDoubleSpinBox(self)
+            self.b_delay.setRange(0.0, 30.0)
+            self.b_delay.setSingleStep(0.5)
+            self.b_delay.setSuffix(" s")
+            self.b_delay.setValue(ui.bubble_fade_delay_sec)
+            self.b_hold = QDoubleSpinBox(self)
+            self.b_hold.setRange(0.0, 30.0)
+            self.b_hold.setSingleStep(0.5)
+            self.b_hold.setSuffix(" s")
+            self.b_hold.setValue(ui.bubble_idle_hold_sec)
+
+            form.addRow(tr("settings.appearance.theme"), self.b_theme)
+            form.addRow(tr("settings.appearance.background_opacity"), self.b_opacity)
+            form.addRow(tr("settings.appearance.bubble_font"), self.b_font)
+            form.addRow(tr("settings.appearance.bubble_fade"), self.b_fade)
+            form.addRow(tr("settings.appearance.bubble_rms"), self.b_rms)
+            form.addRow(tr("settings.appearance.bubble_idle"), self.b_idle)
+            form.addRow(tr("settings.appearance.bubble_hold"), self.b_hold)
+            form.addRow(tr("settings.appearance.bubble_delay"), self.b_delay)
+
+            btn_row = QDialogButtonBox(
+                QDialogButtonBox.StandardButton.Apply
+                | QDialogButtonBox.StandardButton.Close,
+                self,
+            )
+            btn_row.button(QDialogButtonBox.StandardButton.Apply).setText(tr("settings.apply"))
+            btn_row.button(QDialogButtonBox.StandardButton.Close).setText(tr("notebook.close"))
+            btn_row.clicked.connect(self._on_button)
+            form.addRow(btn_row)
+
+            self.b_theme.currentIndexChanged.connect(lambda _i: self._preview())
+            self.b_opacity.valueChanged.connect(lambda _v: self._preview())
+            self.b_font.valueChanged.connect(lambda _v: self._preview())
+            self.b_fade.currentIndexChanged.connect(lambda _i: self._preview())
+            self.b_rms.valueChanged.connect(lambda _v: self._preview())
+            self.b_idle.textChanged.connect(lambda _t: self._preview())
+            self.b_delay.valueChanged.connect(lambda _v: self._preview())
+            self.b_hold.valueChanged.connect(lambda _v: self._preview())
+
+        def _ui_from_form(self) -> UIConfig:
+            import dataclasses
+
+            ui = dataclasses.replace(controller.cfg.ui)
+            ui.bubble_theme = self.b_theme.currentData() or ""
+            ui.bubble_opacity = (
+                self.b_opacity.value() / 100.0 if self.b_opacity.value() > 0 else None
+            )
+            ui.bubble_font_size = int(self.b_font.value())
+            ui.bubble_fade = self.b_fade.currentData() or "dim"
+            ui.bubble_rms_threshold = float(self.b_rms.value())
+            ui.bubble_idle_text = self.b_idle.text()
+            ui.bubble_fade_delay_sec = float(self.b_delay.value())
+            ui.bubble_idle_hold_sec = float(self.b_hold.value())
+            return ui
+
+        def _preview(self) -> None:
+            if on_preview is not None:
+                on_preview(self._ui_from_form())
+
+        def reload(self) -> None:
+            """重开时从已保存配置重载表单（不残留上次未应用的预览值）。"""
+            ui = controller.cfg.ui
+            idx = self.b_theme.findData(ui.bubble_theme)
+            self.b_theme.setCurrentIndex(max(0, idx))
+            self.b_opacity.setValue(
+                round(ui.bubble_opacity * 100) if ui.bubble_opacity is not None else 0
+            )
+            self.b_font.setValue(ui.bubble_font_size)
+            idx = self.b_fade.findData(ui.bubble_fade)
+            self.b_fade.setCurrentIndex(max(0, idx))
+            self.b_rms.setValue(ui.bubble_rms_threshold)
+            self.b_idle.setText(ui.bubble_idle_text)
+            self.b_delay.setValue(ui.bubble_fade_delay_sec)
+            self.b_hold.setValue(ui.bubble_idle_hold_sec)
+
+        def _on_button(self, button) -> None:
+            role = self.sender().buttonRole(button)
+            if role == QDialogButtonBox.ButtonRole.ApplyRole:
+                ui = self._ui_from_form()
+                result = controller.apply_appearance(ui)
+                if result.ok and on_applied is not None:
+                    on_applied(ui)
+            else:
+                self.reject()
+
+    return BubbleAppearanceDialog()

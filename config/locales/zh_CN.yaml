@@ -160,3 +160,32 @@ notebook.export_done: 已导出：
 notebook.sort: 排序
 notebook.sort.recognition: 识别顺序
 notebook.sort.analysis: 分析顺序
+overlay.menu.bubble: 气泡模式（漫画对话框）
+bubble.exit: 退出气泡模式
+bubble.tail: 尾巴方向
+bubble.tail.N: 上
+bubble.tail.NE: 右上
+bubble.tail.E: 右
+bubble.tail.SE: 右下
+bubble.tail.S: 下
+bubble.tail.SW: 左下
+bubble.tail.W: 左
+bubble.tail.NW: 左上
+bubble.display: 显示内容
+bubble.display.both: 原文 + 译文
+bubble.display.source_only: 仅原文
+bubble.display.translation_only: 仅译文
+settings.appearance.bubble_group: 气泡模式（独立外观）
+settings.appearance.bubble_theme_follow: 跟随主悬浮窗
+settings.appearance.bubble_follow: 跟随
+settings.appearance.bubble_font: 字号
+settings.appearance.bubble_font_default: 默认
+bubble.appearance: 外观设置…
+settings.appearance.bubble_fade: 淡出
+settings.appearance.bubble_fade.off: 关闭
+settings.appearance.bubble_fade.dim: 降低透明度保持
+settings.appearance.bubble_fade.hide: 淡出后隐藏
+settings.appearance.bubble_rms: 淡出 RMS 阈值
+settings.appearance.bubble_idle: 无人声待机文字
+settings.appearance.bubble_hold: 待机前字幕保持（秒）
+settings.appearance.bubble_delay: 淡出延时（秒）

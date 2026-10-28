@@ -192,6 +192,11 @@ def make_overlay_window_class():
             self._settings_dialog = None
             self._notebook_window = None
             self._notebook_factory = notebook_factory
+            self._bubble = None
+            self._bubble_mode = False
+            self._bubble_dialog = None
+            self._bubble_below_since = None  # RMS/VAD 低于阈值的起始时刻（防抖延时）
+            self._replay_mode = replay_mode
             self._preview_active = False
             self._appearance_saved = None
             self.grammar_card = None
@@ -266,12 +271,15 @@ def make_overlay_window_class():
             self.act_subtitles.triggered.connect(
                 lambda checked: self.subtitle_view.setVisible(checked)
             )
+            self.act_bubble = QAction(tr("overlay.menu.bubble"), self)
+            self.act_bubble.triggered.connect(lambda: self.set_bubble_mode(True))
             for a in (
                 self.act_through,
                 self.act_ontop,
                 self.act_autoscroll,
                 self.act_compact,
                 self.act_subtitles,
+                self.act_bubble,
             ):
                 self.main_menu.addAction(a)
             self.btn_menu.setMenu(self.main_menu)
@@ -463,9 +471,13 @@ def make_overlay_window_class():
             self.tray_menu = menu
             act_restore = QAction(tr("overlay.tray.restore"), self)
             act_restore.triggered.connect(lambda: self.set_click_through(False))
+            self.act_bubble_exit = QAction(tr("bubble.exit"), self)
+            self.act_bubble_exit.setVisible(False)  # 仅气泡模式下显示
+            self.act_bubble_exit.triggered.connect(lambda: self.set_bubble_mode(False))
             act_quit = QAction(tr("overlay.tray.quit"), self)
             act_quit.triggered.connect(self.close)
             menu.addAction(act_restore)
+            menu.addAction(self.act_bubble_exit)
             menu.addAction(act_quit)
             menu.setStyleSheet(self._appearance.menu_stylesheet)
             self.tray.setContextMenu(menu)
@@ -475,6 +487,7 @@ def make_overlay_window_class():
             # ---- 信号接线 ----
             self.add_sentence.connect(self._on_legacy_sentence)
             self.upsert_segment.connect(self.subtitle_view.upsert_segment)
+            self.upsert_segment.connect(self._bubble_on_segment)
             self.analysis_ready.connect(self.subtitle_view.upsert_segment)
             self.set_status.connect(self._on_status)
             self._op_done.connect(lambda cb: cb())
@@ -579,6 +592,76 @@ def make_overlay_window_class():
         def _toggle_compact(self, on: bool) -> None:
             self.barB.setVisible(not on and self._ui.show_bar_b)
             self.barC.setVisible(not on and self._ui.show_bar_c)
+
+        # ==================== 气泡模式（漫画对话框）====================
+
+        def open_bubble_settings(self) -> None:
+            """气泡右键「外观设置…」：只含气泡三项的独立小窗，预览/应用与主设置页同链路。"""
+            if self.controller is None:
+                return
+            from .settings import create_bubble_appearance_dialog
+
+            if self._bubble_dialog is None:
+                self._appearance_saved = self._appearance_saved or self._ui
+                self._bubble_dialog = create_bubble_appearance_dialog(
+                    self.controller,
+                    on_preview=self._preview_appearance,
+                    on_applied=self._on_appearance_applied,
+                )
+                self._bubble_dialog.finished.connect(self._on_settings_closed)
+            else:
+                self._bubble_dialog.reload()  # 重开回到已保存配置
+            self._bubble_dialog.show()
+            self._bubble_dialog.raise_()
+            self._bubble_dialog.activateWindow()
+
+        def set_bubble_mode(self, on: bool) -> None:
+            """气泡模式：悬浮窗隐藏，漫画对话框接管显示；退出后恢复正常悬浮窗。"""
+            if on == self._bubble_mode:
+                return
+            if on:
+                from .bubble import create_bubble
+
+                if self._bubble is None:
+                    self._bubble = create_bubble(
+                        self._ui,
+                        on_exit=lambda: self.set_bubble_mode(False),
+                        on_open_settings=self.open_bubble_settings,  # 气泡专属外观小窗
+                    )
+                # 把当前最新句带入气泡
+                if self.subtitle_view._order:
+                    latest = self.subtitle_view._blocks[
+                        self.subtitle_view._order[-1]
+                    ]._segment
+                    self._bubble.update_segment(latest)
+                self.hide()
+                self._bubble.show()
+            else:
+                if self._bubble is not None:
+                    self._bubble.hide()
+                self.show()
+            self._bubble_mode = on
+            self.act_bubble_exit.setVisible(on)
+
+        @property
+        def bubble_mode(self) -> bool:
+            return self._bubble_mode
+
+        def _bubble_on_segment(self, segment) -> None:
+            """实时：每个新句/译文回写都同步到气泡（最新句）。"""
+            if self._bubble_mode and self._bubble is not None:
+                self._bubble.update_segment(segment)
+
+        def notify_current_segment(self, segment_id) -> None:
+            """回放：当前播放句变化 → 高亮 + 气泡同步；句间空白 → 气泡淡出。"""
+            self.subtitle_view.set_current_segment(segment_id)
+            if self._bubble_mode and self._bubble is not None:
+                if segment_id is None:
+                    self._bubble.fade_out()  # 当前句播放完毕
+                elif segment_id in self.subtitle_view._blocks:
+                    self._bubble.update_segment(
+                        self.subtitle_view._blocks[segment_id]._segment
+                    )
 
         # ==================== 语言对切换（§4.2 会话滚动）====================
 
@@ -720,11 +803,33 @@ def make_overlay_window_class():
             self._asr_info_text = text
 
         def _refresh_metrics(self) -> None:
-            if not self.barC.isVisible():
-                return
             system = self.sampler.sample() if self.sampler is not None else None
             snap = self.metrics.snapshot(system=system) if self.metrics is not None else None
             if snap is None:
+                return
+            # 气泡模式（实时，主窗隐藏）：
+            # RMS 低于阈值持续超过延时 → 淡出（防抖）；
+            # RMS 恢复即立即显示（不等 VAD 确认语音）；VAD 无人声 → 显示待机文字
+            # 注意：必须在 barC 可见性检查之前——气泡模式下 barC 随主窗隐藏
+            if self._bubble_mode and self._bubble is not None and not self._replay_mode:
+                import time as _time
+
+                rms_ok = snap.rms >= self._ui.bubble_rms_threshold
+                if rms_ok:
+                    self._bubble_below_since = None
+                    self._bubble.fade_in()  # RMS 高于阈值立即恢复显示
+                    if not snap.vad_active:
+                        self._bubble.show_idle(
+                            self._ui.bubble_idle_text,
+                            hold_sec=self._ui.bubble_idle_hold_sec,
+                        )
+                else:
+                    now = _time.monotonic()
+                    if self._bubble_below_since is None:
+                        self._bubble_below_since = now
+                    if now - self._bubble_below_since >= self._ui.bubble_fade_delay_sec:
+                        self._bubble.fade_out()
+            if not self.barC.isVisible():
                 return
             # 行 1：RMS/VAD 横向进度条
             self.rms_bar.setValue(min(100, round(snap.rms * 250)))
@@ -862,6 +967,11 @@ def make_overlay_window_class():
             if self.metrics is not None:
                 self._refresh_metrics()  # 监控行部件按新主题重建
             self.subtitle_view.set_appearance(self._appearance)
+            if self._bubble is not None:
+                from .bubble import bubble_spec
+
+                self._bubble.set_appearance(bubble_spec(ui))  # 气泡独立外观
+                self._bubble.set_fade_config(ui.bubble_fade, ui.bubble_fade_min)
             self.subtitle_view.set_auto_scroll(ui.auto_scroll)
             self.act_autoscroll.setChecked(ui.auto_scroll)
             self.act_compact.setChecked(ui.compact_mode)
@@ -950,6 +1060,10 @@ def make_overlay_window_class():
                 self._settings_dialog.close()
             if self._notebook_window is not None:
                 self._notebook_window.close()
+            if self._bubble is not None:
+                self._bubble.close()
+            if self._bubble_dialog is not None:
+                self._bubble_dialog.close()
             self.tray.hide()
             QApplication.quit()
             super().closeEvent(event)

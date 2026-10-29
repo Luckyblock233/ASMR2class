@@ -29,6 +29,9 @@ class LaunchParams:
     session_dir: str = ""           # 回放：会话目录
     media: str = ""                 # 回放：媒体文件
     srt: str = ""                   # 回放：外部 SRT
+    translation_provider: str = ""  # 翻译槽选中的 provider id（"" = 不绑定）
+    grammar_provider: str = ""      # 语法槽选中的 provider id（"" = 不绑定）
+    provider_keys: dict[str, str] = field(default_factory=dict)  # 启动器中填写的 API 密钥（pid → key）
 
 
 def _enum_loopback_devices() -> list[str]:
@@ -41,8 +44,21 @@ def _enum_loopback_devices() -> list[str]:
         return []
 
 
-def create_launcher(profiles: list, *, default_profile: str = "", default_source: str = "mic"):
-    """构建启动器对话框（延迟导入 PyQt6）。"""
+def create_launcher(
+    profiles: list,
+    *,
+    default_profile: str = "",
+    default_source: str = "mic",
+    providers: list = (),
+    slots=None,
+    resource_gate=None,
+):
+    """构建启动器对话框（延迟导入 PyQt6）。
+
+    providers/slots：槽位选择下拉（按能力过滤候选，预填当前绑定）。
+    resource_gate(params) -> bool：点击启动后的资源门禁（缺失资源下载确认 +
+    健康检查，由 main 注入）；返回 False 则留在启动器，不进入主流程。
+    """
     from PyQt6.QtCore import Qt
     from PyQt6.QtWidgets import (
         QCheckBox,
@@ -113,6 +129,41 @@ def create_launcher(profiles: list, *, default_profile: str = "", default_source
             self.tgt_combo.setCurrentIndex(max(0, idx))
             form.addRow(tr("launcher.target_lang"), self.tgt_combo)
             layout.addLayout(form)
+
+            # 槽位选择（翻译/语法 provider；回放模式不产字幕，整块隐藏）
+            self.provider_box = QWidget(self)
+            pf = QFormLayout(self.provider_box)
+            pf.setContentsMargins(0, 0, 0, 0)
+            self.slot_combos = {}  # "translation" / "grammar" → QComboBox
+            if providers:
+                from ..nlp.providers import filter_for_slot
+
+                current = {
+                    "translation": getattr(slots, "translation", "") if slots else "",
+                    "grammar": getattr(slots, "grammar", "") if slots else "",
+                }
+                for slot, label_key in (
+                    ("translation", "launcher.slot.translation"),
+                    ("grammar", "launcher.slot.grammar"),
+                ):
+                    combo = QComboBox()
+                    combo.addItem(tr("launcher.slot.none"), "")
+                    for p in filter_for_slot(list(providers), slot):
+                        combo.addItem(f"{p.name}（{p.id}）" if p.name else p.id, p.id)
+                    idx = combo.findData(current.get(slot) or "")
+                    combo.setCurrentIndex(max(0, idx))
+                    self.slot_combos[slot] = combo
+                    pf.addRow(tr(label_key), combo)
+                # API 密钥行：所选云端 provider 缺 key 时动态显示（换选择即刷新）
+                self.key_edits = {}  # pid → QLineEdit
+                self.key_box = QWidget(self.provider_box)
+                self._key_layout = QVBoxLayout(self.key_box)
+                self._key_layout.setContentsMargins(0, 0, 0, 0)
+                pf.addRow(self.key_box)
+                for combo in self.slot_combos.values():
+                    combo.currentIndexChanged.connect(lambda _i: self._sync_key_rows())
+                self._sync_key_rows()
+            layout.addWidget(self.provider_box)
 
             # ---- 实时参数 ----
             self.page_realtime = QWidget(self)
@@ -227,10 +278,45 @@ def create_launcher(profiles: list, *, default_profile: str = "", default_source
             for item in self.file_list.selectedItems():
                 self.file_list.takeItem(self.file_list.row(item))
 
+        def _sync_key_rows(self) -> None:
+            """所选云端 provider 缺 API key 时显示密钥输入行（本地托管模型不需要）。"""
+            while self._key_layout.count():
+                item = self._key_layout.takeAt(0)
+                if item.widget() is not None:
+                    item.widget().deleteLater()
+            self.key_edits = {}
+            seen: set[str] = set()
+            for slot in ("translation", "grammar"):
+                pid = (
+                    self.slot_combos[slot].currentData()
+                    if slot in self.slot_combos
+                    else ""
+                )
+                if not pid or pid in seen:
+                    continue
+                seen.add(pid)
+                p = next((pp for pp in providers if pp.id == pid), None)
+                if p is None or p.api_key:
+                    continue
+                if p.local is not None and p.local.managed:
+                    continue  # 本地托管模型无需密钥
+                row = QWidget(self.key_box)
+                hl = QHBoxLayout(row)
+                hl.setContentsMargins(0, 0, 0, 0)
+                hl.addWidget(QLabel(f"{tr('launcher.api_key')}（{p.name or p.id}）"))
+                edit = QLineEdit()
+                edit.setEchoMode(QLineEdit.EchoMode.Password)
+                edit.setPlaceholderText(tr("launcher.api_key_hint"))
+                hl.addWidget(edit, 1)
+                self._key_layout.addWidget(row)
+                self.key_edits[pid] = edit
+            self.key_box.setVisible(bool(self.key_edits))
+
         def _sync_mode_pages(self) -> None:
             self.page_realtime.setVisible(self.rb_realtime.isChecked())
             self.page_batch.setVisible(self.rb_batch.isChecked())
             self.page_replay.setVisible(self.rb_replay.isChecked())
+            self.provider_box.setVisible(not self.rb_replay.isChecked())
 
         def params(self) -> LaunchParams:
             """当前表单内容（不校验）。"""
@@ -254,6 +340,21 @@ def create_launcher(profiles: list, *, default_profile: str = "", default_source
                 session_dir=self.session_edit.text().strip(),
                 media=self.media_edit.text().strip(),
                 srt=self.srt_edit.text().strip(),
+                translation_provider=(
+                    self.slot_combos["translation"].currentData() or ""
+                    if "translation" in self.slot_combos
+                    else ""
+                ),
+                grammar_provider=(
+                    self.slot_combos["grammar"].currentData() or ""
+                    if "grammar" in self.slot_combos
+                    else ""
+                ),
+                provider_keys={
+                    pid: edit.text().strip()
+                    for pid, edit in getattr(self, "key_edits", {}).items()
+                    if edit.text().strip()
+                },
             )
 
         def validate(self, p: LaunchParams) -> str:
@@ -269,6 +370,9 @@ def create_launcher(profiles: list, *, default_profile: str = "", default_source
             error = self.validate(p)
             if error:
                 self.error_label.setText(error)
+                return
+            # 资源门禁（缺失资源下载确认 + 健康检查）：未通过则留在启动器
+            if resource_gate is not None and not resource_gate(p):
                 return
             self.result_params = p
             self.accept()

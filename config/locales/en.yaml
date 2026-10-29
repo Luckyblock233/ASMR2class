@@ -155,6 +155,11 @@ batch.cancelling: Cancelling (saving completed part)…
 batch.all_done: 'Batch finished: {ok}/{total} succeeded'
 launcher.source_lang: Source language
 launcher.target_lang: Target language
+launcher.slot.translation: Translation model
+launcher.slot.grammar: Grammar model
+launcher.slot.none: (None)
+launcher.api_key: API key
+launcher.api_key_hint: Get one from the provider's platform and paste it here
 overlay.source_lang: Source
 overlay.target_lang: Target
 overlay.lang.auto: Auto-detect
@@ -198,3 +203,18 @@ settings.appearance.bubble_rms: Fade RMS threshold
 settings.appearance.bubble_idle: Idle text (no speech)
 settings.appearance.bubble_hold: Keep subtitle before idle (s)
 settings.appearance.bubble_delay: Fade delay (s)
+download.title: Resources to download
+download.intro: "First run needs the following resources (one-time download). Click \"Download & continue\"; the app starts automatically after everything checks out:"
+download.col.resource: Resource
+download.col.status: Status
+download.status.pending: Pending
+download.status.downloading: Downloading…
+download.status.ok: ✓ Done
+download.status.failed: ✗ Failed
+download.health: Checking model services…
+download.done: ✓ All resources ready, starting…
+download.failed: "Download failed (usually network); check your connection and retry:"
+download.health_failed: "Resources downloaded, but these service checks failed (most often a missing cloud API key). Cancel to go back and fix it, or start anyway — translation will be unavailable (source text only):"
+download.continue_anyway: Start anyway
+download.start: Download & continue
+download.cancel: Cancel

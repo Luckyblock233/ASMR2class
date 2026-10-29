@@ -32,9 +32,16 @@ def test_example_template_defaults(tmp_path):
     assert cfg.context.tail_sentences == 3
     assert cfg.context.block.max_sentences == 8
     assert cfg.ui.overlay is True
-    # 模板的 providers/slots 节全部注释掉：默认无 Provider、无绑定（向导负责注册）
-    assert cfg.providers == []
-    assert cfg.slots.translation == ""
+    # 模板预存：翻译与语法默认都走云端 API（首次启动只需下载 ASR 模型）；
+    # 本地 GGUF provider 已声明但默认不绑定，换绑时才提示下载（见 resources.py）
+    assert [p.id for p in cfg.providers] == ["deepseek", "index-translate"]
+    local = cfg.providers[1]
+    assert local.type == "llama_cpp_server"
+    assert local.local is not None and local.local.managed
+    assert local.local.download["hf_repo"]  # 预置了真实可下载的仓库
+    assert cfg.providers[0].api_key == ""  # 云端 key 留空，由用户填写/环境变量注入
+    assert cfg.slots.translation == "deepseek"
+    assert cfg.slots.grammar == "deepseek"
 
 
 def test_no_hardcoded_llm_provider():

@@ -146,6 +146,11 @@ batch.cancelling: 正在取消（保存已完成部分）…
 batch.all_done: 批处理完成：{ok}/{total} 成功
 launcher.source_lang: 源语言
 launcher.target_lang: 目标语言
+launcher.slot.translation: 翻译模型
+launcher.slot.grammar: 语法分析模型
+launcher.slot.none: （不绑定）
+launcher.api_key: API 密钥
+launcher.api_key_hint: 到所选服务商的开放平台注册获取，粘贴到此处
 overlay.source_lang: 源语言
 overlay.target_lang: 目标语言
 overlay.lang.auto: 自动识别
@@ -189,3 +194,18 @@ settings.appearance.bubble_rms: 淡出 RMS 阈值
 settings.appearance.bubble_idle: 无人声待机文字
 settings.appearance.bubble_hold: 待机前字幕保持（秒）
 settings.appearance.bubble_delay: 淡出延时（秒）
+download.title: 首次运行需要下载资源
+download.intro: 首次使用需要下载以下资源（只需下载一次）。点击「下载并继续」后自动下载并检查可用性，全部通过后自动启动：
+download.col.resource: 资源
+download.col.status: 状态
+download.status.pending: 待下载
+download.status.downloading: 下载中…
+download.status.ok: ✓ 完成
+download.status.failed: ✗ 失败
+download.health: 检查模型服务是否可用…
+download.done: ✓ 全部就绪，正在启动…
+download.failed: 下载失败（多为网络问题），可检查网络后重试：
+download.health_failed: 资源已下载完成，但以下服务检查未通过（常见于云端 API 密钥未填写）。可点「取消」返回修改，或仍要启动——翻译将暂不可用（仅显示原文）：
+download.continue_anyway: 仍要启动
+download.start: 下载并继续
+download.cancel: 取消

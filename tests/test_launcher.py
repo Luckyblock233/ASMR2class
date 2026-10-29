@@ -92,6 +92,100 @@ def test_launcher_cancel_yields_none(qapp):
     w.close()
 
 
+def _providers():
+    from src.config import ProviderConfig
+
+    cloud = ProviderConfig(
+        id="cloud", name="云端 API", type="openai_compatible",
+        base_url="https://api.example.com/v1", model="m",
+        capabilities=["translation", "grammar"],
+    )
+    tr_only = ProviderConfig(
+        id="tr-only", name="本地翻译", type="llama_cpp_server",
+        base_url="http://127.0.0.1:8080/v1", model="tr",
+        capabilities=["translation"],
+    )
+    return [cloud, tr_only]
+
+
+def test_launcher_slot_selection(qapp):
+    """启动器槽位选择：按能力过滤候选、预填当前绑定、参数携带选择。"""
+    from src.config import SlotsConfig
+
+    w = create_launcher(
+        _profiles(), providers=_providers(),
+        slots=SlotsConfig(translation="tr-only", grammar="cloud"),
+    )
+    w.show()
+    qapp.processEvents()
+
+    tr_combo = w.slot_combos["translation"]
+    gr_combo = w.slot_combos["grammar"]
+    # 能力过滤：翻译槽 2 个 provider + 不绑定；语法槽只有 cloud + 不绑定
+    assert tr_combo.count() == 3 and gr_combo.count() == 2
+    # 预填当前绑定
+    assert tr_combo.currentData() == "tr-only"
+    assert gr_combo.currentData() == "cloud"
+    # 回放模式隐藏槽位选择
+    w.rb_replay.setChecked(True)
+    qapp.processEvents()
+    assert not w.provider_box.isVisible()
+    w.rb_realtime.setChecked(True)
+
+    # 改选翻译槽 → 参数携带
+    tr_combo.setCurrentIndex(tr_combo.findData("cloud"))
+    p = w.params()
+    assert p.translation_provider == "cloud"
+    assert p.grammar_provider == "cloud"
+    w.close()
+
+
+def test_launcher_api_key_row(qapp):
+    """选中缺 key 的云端 provider → 显示密钥输入行并随参数传出；有 key 则不显示。"""
+    from src.config import SlotsConfig
+
+    providers = _providers()  # cloud 无 api_key
+    w = create_launcher(
+        _profiles(), providers=providers,
+        slots=SlotsConfig(translation="cloud", grammar="cloud"),
+    )
+    w.show()
+    qapp.processEvents()
+    assert w.key_box.isVisible() or "cloud" in w.key_edits  # 缺 key → 显示输入行
+    assert list(w.key_edits) == ["cloud"]  # 两槽绑同一 provider → 一行
+    w.key_edits["cloud"].setText("sk-test-123")
+    p = w.params()
+    assert p.provider_keys == {"cloud": "sk-test-123"}
+
+    # 已有 key → 不显示输入行
+    providers[0].api_key = "already"
+    w2 = create_launcher(
+        _profiles(), providers=providers,
+        slots=SlotsConfig(translation="cloud", grammar="cloud"),
+    )
+    w2.show()
+    qapp.processEvents()
+    assert w2.key_edits == {}
+    assert not w2.key_box.isVisible()
+    w.close()
+    w2.close()
+
+
+def test_launcher_resource_gate_blocks_start(qapp):
+    """资源门禁在启动器内：gate 返回 False 时不进入主流程（留在启动器）。"""
+    calls = []
+    w = create_launcher(_profiles(), resource_gate=lambda p: calls.append(p) or False)
+    w.show()
+    w._on_start()
+    assert len(calls) == 1  # gate 被调用
+    assert w.result_params is None  # 未通过 → 不收参数
+    w2 = create_launcher(_profiles(), resource_gate=lambda p: True)
+    w2._on_start()
+    assert w2.result_params is not None
+    w.close()
+    w2.close()
+
+
 def test_batch_window_progress_and_finish(qapp, tmp_path):
     """批处理窗口：假 runner 跑完两文件，状态/进度/日志正确，rc=0。"""
     from src.ui.batch_window import create_batch_shell

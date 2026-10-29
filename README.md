@@ -4,9 +4,9 @@
 当前进度：**M3 第一轮（语法学习闭环）已完成**；完整音视频回放、设置页与完整外观系统属于后续 M3。需求文档见 `doc/实时语音翻译学习工具-需求文档.md`。
 
 - 🎙 麦克风 + 系统音内录（WASAPI loopback，Windows）双来源
-- ⚡ 流式识别：VAD 断句（可插拔：内置 Silero 或耳语专用 Whisper-Vad-ASMR ONNX），GPU（int8_float16）/ CPU（int8）自适应，显存超预算自动降级；幻觉句门控（质量阈值 + 短语黑名单）
+- ⚡ 流式识别：Silero VAD 断句，GPU（int8_float16）/ CPU（int8）自适应，显存超预算自动降级；幻觉句门控（质量阈值 + 短语黑名单）
 - 🧩 **模型可插拔**：Provider Registry + 翻译/语法双槽位，云端 OpenAI 兼容服务与本地 llama.cpp GGUF 模型混绑，语言档案可覆盖绑定（见下文「模型提供方与槽位」）
-- 🌐 翻译完全配置化：`base_url / api_key / model` 三项接入任意 OpenAI 兼容服务，**无默认服务商**
+- 🌐 翻译完全配置化：`base_url / api_key / model` 三项接入任意 OpenAI 兼容服务；预存配置默认 DeepSeek API（翻译 + 语法分析），可选换绑本地 Index-Translate-2B，缺失资源按提示引导下载
 - 🧠 **上下文感知翻译**：块级整体翻译（语义分块）+ 滑动历史窗口 + 滚动记忆（术语表/风格摘要），解决代词断裂、术语不一致、语域漂移（见 `doc/20261014/上下文感知翻译-专项需求文档.md`）
 - 🧑‍🏫 **M3 语法学习闭环**：可选异步语法分析、按 ID 原位更新句块、语言档案驱动的语法卡、分析随会话落盘并支持重载预览
 - 🪟 置顶半透明悬浮窗：可拖拽、透明度可调（控制条按钮）、点击穿透（托盘菜单恢复）、逐句滚动双语字幕
@@ -14,22 +14,39 @@
 - 🗂 语言档案（`config/languages/*.yaml`）+ 外部 prompt 模板（`config/prompts/`），新增语言零代码改动
 - 🔌 断网自动降级为仅显示原文，恢复后自动续翻；控制台显示 ONLINE/OFFLINE 与 token 用量
 
-## 快速开始（Windows 11 + RTX 3060）
+## 快速开始（Windows，零开发基础）
 
-```powershell
-# 1. 安装 uv（https://docs.astral.sh/uv/），然后：
-git clone <repo> && cd ASMR2class
-uv sync                      # 自动安装 Python 3.12 + 全部依赖（含 pyaudiowpatch）
+1. **装 uv**（Python 包管理器，装一次即可）：打开 <https://docs.astral.sh/uv/getting-started/installation/> 按指引安装。
+2. **下载本项目**：`git clone` 本仓库，或点 GitHub 页面 Code → Download ZIP 后解压。
+3. **双击项目文件夹里的 `启动.bat`**：首次运行会自动安装依赖（约 1-2 GB，耐心等），然后弹出启动窗口。
+4. **首次启动**：按提示下载语音识别模型（约 466MB，只需下载一次）。翻译默认走 DeepSeek 云端 API，**需要一个 API key**——到 <https://platform.deepseek.com/> 注册并在「API keys」页创建，粘贴到启动器的「API 密钥」框（只填一次，自动保存）。没有 key 也能启动，但只能看到原文字幕。
+5. 在启动窗口选好语言（如 日语 → 中文），点「启动」，把悬浮窗拖到合适位置即可。
 
-# 2. 首次运行会进入设置向导，填写你的 LLM base_url / api_key / model
-uv run python -m src.main --source loopback --profile ja
-```
+> 磁盘占用：完整安装约 5-6 GB（依赖 + 模型）。没有 NVIDIA 显卡也能用（自动 CPU 模式，速度略慢）。
 
-首次使用某个模型档位需下载（small 约 466MB，medium 约 1.5GB）。直连 HuggingFace 失败且未设镜像时，程序会**自动切换到 hf-mirror.com 重试**；也可手动预设（更快）：
+**想用本地翻译模型（离线、免费、不吃 API 额度）**：设置页把翻译模型改绑到 Index-Translate-2B，按提示下载模型文件（约 1.3GB）即可；需要先安装 llama.cpp（见下方常见问题第 3 条）。
 
-```powershell
-$env:HF_ENDPOINT="https://hf-mirror.com"; $env:HF_HUB_DISABLE_XET="1"
-```
+命令行用户也可以 `uv run python -m src.main` 启动（更多参数见下文「使用」）。
+
+## 常见问题（FAQ）
+
+**Q：字幕只有原文，没有翻译？**
+A：翻译 API 密钥没填或不对。打开 设置 → Provider，检查 DeepSeek 的 api_key；密钥在 <https://platform.deepseek.com/> 创建。语法分析（句子成分讲解）也用这个 key，并需在启动器勾选「语法分析」才开启。
+
+**Q：启动时一直卡在下载/下载失败？**
+A：多为网络问题。模型直连 HuggingFace 失败会自动切换国内镜像重试；仍失败可先设镜像再启动（PowerShell：`$env:HF_ENDPOINT="https://hf-mirror.com"`）。`uv sync` 慢可给 uv 配国内 PyPI 镜像。
+
+**Q：想用本地翻译模型，提示找不到 llama-server？**
+A：本地模型依赖 llama.cpp：到 <https://github.com/ggml-org/llama.cpp/releases> 下载 Windows 版压缩包，解压后把文件夹加入系统 PATH（或在 provider 配置里填 llama-server 的绝对路径）。
+
+**Q：Windows SmartScreen / 杀毒软件拦截？**
+A：本项目及 llama.cpp 均为开源软件，属误报。SmartScreen 点「仍要运行」；杀毒软件把项目文件夹加入信任区。
+
+**Q：显卡不是 NVIDIA / 显存不够？**
+A：自动降级到 CPU 运行，功能不变、速度略慢，无需任何操作。
+
+**Q：内录没声音？**
+A：启动器音频来源选「系统音内录」，设备名留空用默认输出设备；选错了设备名关键词会导致录不到。
 
 ## 使用
 

@@ -231,6 +231,131 @@ def test_settings_dialog_smoke_and_override_lock(tmp_path, qapp):
     dialog.close()
 
 
+def _local_provider(pid="local-mt"):
+    from src.config import ProviderConfig, ProviderLocalConfig
+
+    return ProviderConfig(
+        id=pid,
+        name="本地翻译",
+        type="llama_cpp_server",
+        base_url="http://127.0.0.1:8080/v1",
+        model=pid,
+        capabilities=["translation"],
+        local=ProviderLocalConfig(
+            managed=True,
+            gguf_path="models/mt.gguf",
+            download={"hf_repo": "org/repo", "hf_file": "mt.gguf"},
+        ),
+    )
+
+
+class _FakeDownloadDialog:
+    """替换真实下载确认窗：记录 needs，exec 后按预设 ok 返回。"""
+
+    ok_to_give = False
+    instances: list = []
+
+    def __init__(self, needs, on_download, on_health, parent=None):
+        self.needs = needs
+        self.ok = False
+        type(self).instances.append(self)
+
+    def exec(self):
+        self.ok = type(self).ok_to_give
+
+
+def test_binding_local_provider_missing_gguf_prompts_download(tmp_path, qapp, monkeypatch):
+    """换绑到本地托管模型且 GGUF 缺失 → 先弹下载窗；取消则不换绑，下载成功才继续换绑。"""
+    from PyQt6.QtTest import QTest
+
+    from src.ui.settings import create_settings_dialog
+
+    i18n.set_language("zh_CN", PROJECT_ROOT / "config" / "locales")
+    cfg, registry, slots, ctl = _make_env(
+        tmp_path, [_cloud("p"), _local_provider()], slots_cfg=SlotsConfig(translation="p")
+    )
+    monkeypatch.setattr(
+        "src.ui.download_dialog.create_download_dialog", _FakeDownloadDialog
+    )
+    monkeypatch.setattr("src.resources.local_server_missing", lambda _p: None)  # 服务端就绪
+    dialog = create_settings_dialog(ctl)
+    dialog.show()
+    combo = dialog._slot_combos[SLOT_TRANSLATION]
+    combo.setCurrentIndex(combo.findData("local-mt"))
+
+    # 取消下载 → 不换绑
+    _FakeDownloadDialog.ok_to_give = False
+    dialog._apply_slot_binding(SLOT_TRANSLATION)
+    qapp.processEvents()
+    assert len(_FakeDownloadDialog.instances) == 1
+    assert _FakeDownloadDialog.instances[0].needs[0].provider_id == "local-mt"
+    assert slots.resolution.provider_id(SLOT_TRANSLATION) == "p"
+
+    # 下载成功 → 继续换绑（健康检查打桩通过；_run_async 走 worker 线程，等待信号落地）
+    _FakeDownloadDialog.ok_to_give = True
+    monkeypatch.setattr(registry, "check_health", lambda _pid: None)
+    dialog._apply_slot_binding(SLOT_TRANSLATION)
+    for _ in range(100):
+        QTest.qWait(20)
+        if slots.resolution.provider_id(SLOT_TRANSLATION) == "local-mt":
+            break
+    assert slots.resolution.provider_id(SLOT_TRANSLATION) == "local-mt"
+    assert _yaml_slots(cfg)["translation"] == "local-mt"  # 已落盘
+    dialog.close()
+
+
+def test_binding_blocked_when_llama_server_missing(tmp_path, qapp, monkeypatch):
+    """llama-server 未安装：弹指引、不下载 GGUF、不换绑（下载也是徒劳）。"""
+    from PyQt6.QtWidgets import QMessageBox
+
+    from src.ui.settings import create_settings_dialog
+
+    i18n.set_language("zh_CN", PROJECT_ROOT / "config" / "locales")
+    _cfg, _r, slots, ctl = _make_env(
+        tmp_path, [_cloud("p"), _local_provider()], slots_cfg=SlotsConfig(translation="p")
+    )
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: warnings.append(a)))
+    monkeypatch.setattr(
+        "src.ui.download_dialog.create_download_dialog", _FakeDownloadDialog
+    )
+    _FakeDownloadDialog.instances.clear()
+    monkeypatch.setattr("shutil.which", lambda _b: None)  # 模拟未安装 llama-server
+    dialog = create_settings_dialog(ctl)
+    dialog.show()
+    combo = dialog._slot_combos[SLOT_TRANSLATION]
+    combo.setCurrentIndex(combo.findData("local-mt"))
+    dialog._apply_slot_binding(SLOT_TRANSLATION)
+    qapp.processEvents()
+    assert len(warnings) == 1  # 弹出安装指引
+    assert _FakeDownloadDialog.instances == []  # 不进入下载流程
+    assert slots.resolution.provider_id(SLOT_TRANSLATION) == "p"  # 不换绑
+    dialog.close()
+
+
+def test_binding_cloud_provider_no_download_prompt(tmp_path, qapp, monkeypatch):
+    """换绑云端 provider 不弹下载窗。"""
+    from src.ui.settings import create_settings_dialog
+
+    i18n.set_language("zh_CN", PROJECT_ROOT / "config" / "locales")
+    _cfg, registry, _s, ctl = _make_env(
+        tmp_path, [_cloud("p"), _cloud("q")], slots_cfg=SlotsConfig(translation="p")
+    )
+    monkeypatch.setattr(
+        "src.ui.download_dialog.create_download_dialog", _FakeDownloadDialog
+    )
+    _FakeDownloadDialog.instances.clear()
+    monkeypatch.setattr(registry, "check_health", lambda _pid: "401")  # 失败也无妨
+    dialog = create_settings_dialog(ctl)
+    dialog.show()
+    combo = dialog._slot_combos[SLOT_TRANSLATION]
+    combo.setCurrentIndex(combo.findData("q"))
+    dialog._apply_slot_binding(SLOT_TRANSLATION)
+    qapp.processEvents()
+    assert _FakeDownloadDialog.instances == []
+    dialog.close()
+
+
 # ==================== 阶段 6：记忆编辑与 prompt 恢复 ====================
 
 

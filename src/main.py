@@ -956,15 +956,90 @@ def run_launcher(args: argparse.Namespace) -> int:
 
     fix_app_font(app)
     profiles = list(load_profiles(cfg.languages_dir).values())
+
+    def resource_gate(p) -> bool:
+        """点击启动后的资源门禁：缺失资源确认下载 + 健康检查（在启动器内完成）。
+
+        使用启动器中刚选择的槽位绑定（可能尚未落盘）做检查。
+        """
+        if p.mode == "replay":
+            return True
+        from .config import SlotsConfig
+        from .resources import (
+            bound_providers,
+            collect_missing,
+            download_need,
+            health_check,
+            local_server_missing,
+        )
+
+        # 启动器中刚填写的密钥先应用到内存（通过门禁并启动后才落盘）
+        for pcfg in cfg.providers:
+            key = p.provider_keys.get(pcfg.id, "").strip()
+            if key:
+                pcfg.api_key = key
+
+        selected = SlotsConfig(
+            translation=p.translation_provider, grammar=p.grammar_provider
+        )
+        # 本地托管 provider 的服务端程序缺失 → 下载 GGUF 也是徒劳，先提示安装
+        for provider in bound_providers(cfg, p.grammar, selected):
+            msg = local_server_missing(provider)
+            if msg:
+                from PyQt6.QtWidgets import QMessageBox
+
+                from .ui.i18n import tr
+
+                QMessageBox.warning(launcher, tr("download.title"), msg)
+                return False
+        needs = collect_missing(
+            cfg, mode=p.mode, grammar_enabled=p.grammar, slots_override=selected
+        )
+        if not needs:
+            return True
+        from .ui.download_dialog import create_download_dialog
+
+        dialog = create_download_dialog(
+            needs,
+            on_download=lambda need, log_fn: download_need(need, cfg, log_fn=log_fn),
+            on_health=lambda: health_check(cfg, p.grammar, slots_override=selected),
+            parent=launcher,
+        )
+        dialog.exec()
+        return dialog.ok
+
     launcher = create_launcher(
         profiles, default_profile=args.profile or cfg.default_profile,
         default_source=cfg.audio.source,
+        providers=cfg.providers, slots=cfg.slots,
+        resource_gate=resource_gate,
     )
     # 模态 exec：启动/退出都使对话框立即返回，不依赖"最后窗口关闭"语义
     launcher.exec()
     params = launcher.result_params
     if params is None:
         return 0  # 用户取消
+
+    # 启动器里的槽位选择落盘（下次启动即为默认绑定）；
+    # 仅在启动器确实展示了选择框时生效（无 provider 时不误清空既有绑定）
+    from .config import SlotsConfig, save_slots_config
+
+    selected_slots = SlotsConfig(
+        translation=params.translation_provider, grammar=params.grammar_provider
+    )
+    if cfg.providers and selected_slots != cfg.slots:
+        save_slots_config(cfg, selected_slots)
+        cfg.slots = selected_slots
+
+    # 启动器中填写的 API 密钥落盘（写回对应 provider，不进任何日志）
+    if params.provider_keys:
+        from .config import save_provider_config
+
+        for pcfg in cfg.providers:
+            key = params.provider_keys.get(pcfg.id, "").strip()
+            if key:
+                pcfg.api_key = key
+                save_provider_config(cfg, pcfg, cfg.slots)
 
     args.profile = None  # 自由语言对模式：档案由 source/target 合成
     args.debug = params.debug

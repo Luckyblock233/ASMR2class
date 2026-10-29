@@ -20,41 +20,48 @@ llm:
 # 翻译与语法分析是两个独立槽位，按 provider id 绑定；可绑同一 provider。
 # 能力标签：translation（可绑翻译槽）| grammar（可绑语法槽）| glossary_constraint（术语表硬约束）
 # 语言档案内 slots.translation / slots.grammar 可覆盖此处绑定（档案优先）。
-# providers:
-#   - id: my-cloud                     # 云端通用模型（OpenAI 兼容）
-#     name: "云端通用模型"
-#     type: openai_compatible
-#     base_url: "https://your-provider.example.com/v1"
-#     api_key: ""                      # 建议留空，用环境变量 ASR2CLASS_LLM_API_KEY
-#     model: "your-model-name"
-#     capabilities: [translation, grammar]
 #
-#   - id: local-translator             # 本地 GGUF 翻译模型（llama.cpp server，应用托管子进程）
-#     name: "本地翻译模型"
-#     type: llama_cpp_server
-#     base_url: "http://127.0.0.1:8080/v1"
-#     api_key: "EMPTY"
-#     model: "local-translator"        # llama-server 的 --alias
-#     capabilities: [translation, glossary_constraint]   # 翻译专用，不能绑语法槽
-#     params:                          # 请求参数透传（按模型官方推荐配置）
-#       temperature: 0
-#       max_tokens: 1024
-#       chat_template_kwargs: {enable_thinking: false}   # 嵌套键原样进 extra_body
-#     local:
-#       managed: true                  # 应用负责启动/停止 llama-server
-#       gguf_path: "models/translator-Q4_K_M.gguf"
-#       server_bin: "llama-server"     # 新版 llama.cpp 单二进制用 "llama serve"；也可填绝对路径
-#       server_args: "--port 8080 --ctx-size 8192 -ngl 99"
-#       vram_budget_mb: 1500           # 启动前显存预检：空闲不足时警告（不静默抢占）
-#       download:                      # uv run python -m src.main --download-model local-translator
-#         hf_repo: "your-org/your-gguf-repo"        # 例：IndexTeam/Index-Translate-2B-GGUF
-#         hf_file: "translator-Q4_K_M.gguf"         # 例：Index-Translate-2B.Q4_K_M.gguf
-#         modelscope_repo: "your-org/your-gguf-repo"
-#         modelscope_file: "translator-Q4_K_M.gguf"
-#
-# slots:
-#   translation: local-translator      # 翻译槽绑定
-#   grammar: my-cloud                  # 语法槽绑定（留空 = 语法分析停用）
+# 预存配置：翻译与语法分析默认都走 DeepSeek API（填入 api_key 即可用，
+# 首次启动只需下载 ASR 模型）。本地 Index-Translate-2B 已声明但默认不绑定——
+# 在设置页把翻译槽改绑到它时，会提示下载 GGUF（约 1.3GB）后自动启用。
+providers:
+  - id: deepseek                   # 云端 API（OpenAI 兼容）：默认翻译 + 语法分析
+    name: "DeepSeek（云端 API）"
+    type: openai_compatible
+    base_url: "https://api.deepseek.com/v1"
+    api_key: ""                    # 必填：在此填写或设环境变量 ASR2CLASS_LLM_API_KEY
+    model: "deepseek-chat"
+    capabilities: [translation, grammar]
+
+  - id: index-translate            # 可选：本地翻译模型（IndexTeam/Index-Translate-2B，GGUF Q4_K_M ≈1.3GB）
+    name: "Index-Translate-2B（本地翻译）"
+    type: llama_cpp_server
+    base_url: "http://127.0.0.1:8080/v1"
+    api_key: "EMPTY"
+    model: "index-translate"       # llama-server 的 --alias
+    capabilities: [translation, glossary_constraint]   # 翻译专用，不绑语法槽
+    params:                        # 请求参数透传（按模型官方推荐配置）
+      temperature: 0
+      max_tokens: 1024
+      chat_template_kwargs: {enable_thinking: false}   # 嵌套键原样进 extra_body
+    local:
+      managed: true                # 应用负责启动/停止 llama-server
+      gguf_path: "models/Index-Translate-2B.Q4_K_M.gguf"
+      server_bin: "llama-server"   # 新版 llama.cpp 单二进制用 "llama serve"；也可填绝对路径
+      server_args: "--port 8080 --ctx-size 8192 -ngl 99"
+      vram_budget_mb: 1500         # 启动前显存预检：空闲不足时警告（不静默抢占）
+      download:                    # 换绑到本 provider 或缺失时启动器会提示下载；也可手动 uv run python -m src.main --download-model index-translate
+        hf_repo: "IndexTeam/Index-Translate-2B-GGUF"
+        hf_file: "Index-Translate-2B.Q4_K_M.gguf"
+        modelscope_repo: "IndexTeam/Index-Translate-2B-GGUF"   # 国内镜像
+        modelscope_file: "Index-Translate-2B.Q4_K_M.gguf"
+
+slots:
+  translation: deepseek            # 翻译槽：默认云端 API（可改绑 index-translate 走本地）
+  grammar: deepseek                # 语法槽绑定（留空 = 语法分析停用）
+
+# 想换其他模型：照上面格式加 provider 并改 slots 绑定即可；也可只用 llm 简易模式
+#（此时需把 providers/slots 节整段注释掉）。
 
 # ---- ASR / GPU 策略（见需求文档 §4.2）----
 asr:
@@ -87,7 +94,7 @@ asr:
 
 # ---- 音频采集 ----
 audio:
-  source: mic # mic | loopback
+  source: loopback # loopback = 录电脑播放的声音（看片/直播常用）；mic = 麦克风
   sample_rate: 16000
   block_ms: 30 # 回调块大小
   # loopback 设备名（Windows），留空 = 默认输出设备

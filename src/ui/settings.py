@@ -599,6 +599,34 @@ def create_settings_dialog(
         def _apply_slot_binding(self, slot: str) -> None:
             pid = self._slot_combos[slot].currentData() or ""
 
+            # 选中本地托管模型但 GGUF 未下载 → 先弹下载确认窗（取消/失败则不换绑）；
+            # 下载成功后走正常换绑流程（其健康检查会拉起 llama-server 验证）
+            if pid:
+                from ..resources import gguf_need, local_server_missing
+
+                pcfg = self.controller.registry.config(pid)
+                # 服务端程序缺失时下载 GGUF 也是徒劳，先提示安装 llama.cpp
+                msg = local_server_missing(pcfg) if pcfg else None
+                if msg:
+                    QMessageBox.warning(self, tr("download.title"), msg)
+                    return
+                need = gguf_need(self.controller.cfg, pcfg) if pcfg else None
+                if need is not None:
+                    from ..resources import download_need
+                    from .download_dialog import create_download_dialog
+
+                    dialog = create_download_dialog(
+                        [need],
+                        on_download=lambda n, log_fn: download_need(
+                            n, self.controller.cfg, log_fn=log_fn
+                        ),
+                        on_health=lambda: [],  # 健康检查由换绑事务自身完成
+                        parent=self,
+                    )
+                    dialog.exec()
+                    if not dialog.ok:
+                        return
+
             def work():
                 return self.controller.apply_binding(
                     slot, pid, health_check=self.controller.registry.check_health

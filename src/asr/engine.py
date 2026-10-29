@@ -311,7 +311,7 @@ class ASREngine:
             except Exception as e2:
                 raise ModelLoadError(
                     f"CPU 兜底加载也失败：{e2}\n"
-                    "若为网络问题，请设置镜像后重试（详见 README「快速开始」）。"
+                    "若为网络问题，请设置镜像后重试（详见 README「常见问题」）。"
                 ) from e2
         self._progress("[4/4] ASR 引擎就绪")
         self.info = EngineInfo(

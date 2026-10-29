@@ -14,6 +14,6 @@ models/
 .claude/
 
 # Windows 下载标记（含来源 URL）
-*:Zone.Identifier
+*?Zone.Identifier
 # 本地浸泡测试输出
 soak_out.txt
